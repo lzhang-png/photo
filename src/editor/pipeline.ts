@@ -117,6 +117,10 @@ export class Pipeline {
     this.state.image = image;
   }
 
+  clearImage() {
+    this.state.image = null;
+  }
+
   // Fit canvas to its CSS container, preserving image aspect.
   fitToContainer(adj?: Adjustments, cropPreview = false) {
     const { gl, image } = this.state;

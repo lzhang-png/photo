@@ -16,6 +16,7 @@ import {
   normalizeGeometry,
   type Geometry,
 } from "../editor/geometry";
+import type { DecodeProgress } from "../editor/decodeProgress";
 import {
   DEFAULT_RAW_SETTINGS,
   type RawSettings,
@@ -38,6 +39,7 @@ type EditorState = {
   photoOrder: PhotoId[];
   activePhotoId: PhotoId | null;
   status: string | null;
+  decodeProgress: DecodeProgress | null;
   cropEditing: boolean;
 
   addPhoto: (
@@ -63,6 +65,7 @@ type EditorState = {
   applyAdjustmentsToAll: () => void;
   applyRawSettingsToAll: () => void;
   setStatus: (msg: string | null) => void;
+  setDecodeProgress: (progress: DecodeProgress | null) => void;
   setCropEditing: (editing: boolean) => void;
   clearCatalog: () => void;
 };
@@ -161,6 +164,7 @@ const initialCatalog = buildInitialCatalog();
 export const useEditor = create<EditorState>((set, get) => ({
   ...initialCatalog,
   status: null,
+  decodeProgress: null,
   cropEditing: false,
 
   addPhoto: (image, file, isRaw, makeActive = true) => {
@@ -211,19 +215,7 @@ export const useEditor = create<EditorState>((set, get) => ({
 
   setActivePhoto: (id) => {
     if (!get().photos[id]) return;
-    set({ cropEditing: false });
-    set((s) => {
-      const next: Partial<EditorState> = { activePhotoId: id };
-      // Drop decoded pixels for inactive photos to save memory.
-      const photos = { ...s.photos };
-      for (const pid of Object.keys(photos)) {
-        if (pid !== id && photos[pid].image) {
-          photos[pid] = { ...photos[pid], image: null };
-        }
-      }
-      next.photos = photos;
-      return next;
-    });
+    set({ cropEditing: false, activePhotoId: id });
     schedulePersist(get);
   },
 
@@ -337,6 +329,8 @@ export const useEditor = create<EditorState>((set, get) => ({
   },
 
   setStatus: (status) => set({ status }),
+
+  setDecodeProgress: (decodeProgress) => set({ decodeProgress }),
 
   setCropEditing: (cropEditing) => set({ cropEditing }),
 

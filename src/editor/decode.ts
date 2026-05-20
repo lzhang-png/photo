@@ -1,5 +1,7 @@
+import type { DecodeProgressCallback } from "./decodeProgress";
 import type { DecodedImage } from "./pipeline";
 import { decodeWithLibraw } from "./librawClient";
+import { applyRawDevelopPreset } from "./rawDevelop";
 import { DEFAULT_RAW_SETTINGS, type RawSettings } from "./rawSettings";
 
 const RAW_EXTENSIONS = new Set([
@@ -25,15 +27,21 @@ export function isRawFile(file: File): boolean {
   );
 }
 
-export async function decodeStandard(file: File): Promise<DecodedImage> {
+export async function decodeStandard(
+  file: File,
+  onProgress?: DecodeProgressCallback,
+): Promise<DecodedImage> {
+  onProgress?.(0.15, "Loading image");
   const bitmap = await createImageBitmap(file, {
     imageOrientation: "from-image",
   });
+  onProgress?.(0.65, "Converting");
   const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
   const ctx = canvas.getContext("2d")!;
   ctx.drawImage(bitmap, 0, 0);
   const data = ctx.getImageData(0, 0, bitmap.width, bitmap.height);
   bitmap.close();
+  onProgress?.(1, "Done");
   return {
     width: data.width,
     height: data.height,
@@ -45,11 +53,16 @@ export async function decodeStandard(file: File): Promise<DecodedImage> {
 export async function decodeRaw(
   file: File,
   settings: RawSettings = DEFAULT_RAW_SETTINGS,
+  onProgress?: DecodeProgressCallback,
 ): Promise<DecodedImage> {
+  const report = (value: number, label?: string) => onProgress?.(value, label);
+
   let image: unknown;
   let meta: Record<string, unknown>;
   try {
-    ({ image, meta } = await decodeWithLibraw(file, settings));
+    ({ image, meta } = await decodeWithLibraw(file, settings, (v, label) =>
+      report(v * 0.82, label),
+    ));
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     throw new Error(`RAW decode failed: ${msg || "unknown error"}`);
@@ -62,9 +75,13 @@ export async function decodeRaw(
     );
   }
 
+  report(0.88, "Processing");
   const channels = resolveChannels(img);
   const { width, height } = pickDimensions(img, channels, meta);
   const pixels = toRgba(img.src, width, height, channels);
+  report(0.95, "Applying develop");
+  applyRawDevelopPreset(pixels, width, height, settings.denoise);
+  report(1, "Done");
 
   return { width, height, pixels, flipY: true };
 }
@@ -277,7 +294,8 @@ function toRgba(
 export async function decode(
   file: File,
   rawSettings: RawSettings = DEFAULT_RAW_SETTINGS,
+  onProgress?: DecodeProgressCallback,
 ): Promise<DecodedImage> {
-  if (isRawFile(file)) return decodeRaw(file, rawSettings);
-  return decodeStandard(file);
+  if (isRawFile(file)) return decodeRaw(file, rawSettings, onProgress);
+  return decodeStandard(file, onProgress);
 }

@@ -10,26 +10,61 @@ export type RawSettings = {
 
 export const DEFAULT_RAW_SETTINGS: RawSettings = {
   denoise: 1,
-  autoBright: false,
+  autoBright: true,
   demosaicQuality: 3,
 };
 
-export const DENOISE_OPTIONS: { value: 0 | 1 | 2; label: string }[] = [
-  { value: 0, label: "Off" },
-  { value: 1, label: "Light" },
-  { value: 2, label: "Full" },
+/** UI options — Light and Full only. */
+export const DENOISE_OPTIONS: {
+  value: "light" | "full";
+  denoise: 1 | 2;
+  label: string;
+}[] = [
+  { value: "light", denoise: 1, label: "Light" },
+  { value: "full", denoise: 2, label: "Full" },
 ];
+
+export function denoiseToSelectValue(denoise: RawSettings["denoise"]): "light" | "full" {
+  return denoise === 2 ? "full" : "light";
+}
+
+export function selectValueToDenoise(value: string): 1 | 2 {
+  return value === "full" ? 2 : 1;
+}
+
+export function normalizeRawSettings(
+  raw: Partial<RawSettings> & { preset?: unknown } | null | undefined,
+): RawSettings {
+  const base = { ...DEFAULT_RAW_SETTINGS, ...raw };
+  return {
+    denoise: base.denoise === 2 ? 2 : 1,
+    autoBright: Boolean(base.autoBright),
+    demosaicQuality: Math.round(
+      Math.max(0, Math.min(12, base.demosaicQuality ?? 3)),
+    ),
+  };
+}
 
 export function toLibrawOptions(
   settings: RawSettings,
   opts?: { halfSize?: boolean },
 ) {
+  const d = settings.denoise;
   return {
     useCameraWb: true,
+    useCameraMatrix: 1,
     outputBps: 8,
     outputColor: 1,
     noAutoBright: !settings.autoBright,
-    fbddNoiserd: settings.denoise,
+    // LibRaw auto-bright stretches to near-white; dial back the final gain.
+    ...(settings.autoBright
+      ? { bright: 0.86, autoBrightThr: 0.003 }
+      : {}),
+    fbddNoiserd: d,
+    /** Wavelet denoise threshold (dcraw -n); 0 = off. */
+    threshold: d === 0 ? 0 : d === 1 ? 100 : 200,
+    /** Median filter on color differences; helps chroma noise at full setting. */
+    medPasses: d === 2 ? 1 : 0,
     userQual: Math.round(
       Math.max(0, Math.min(12, settings.demosaicQuality)),
     ),

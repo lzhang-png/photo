@@ -5,22 +5,28 @@ import {
   selectImage,
   selectNeedsReopen,
 } from "./state/store";
+import { StatusPill } from "./components/StatusPill";
 import { Viewport } from "./components/Viewport";
 import { Sidebar } from "./components/Sidebar";
 import { downloadBlob, exportImage } from "./editor/export";
 import { decode } from "./editor/decode";
-import "./App.css";
+import { createBatchProgressReporter } from "./editor/decodeProgress";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Separator } from "@/components/ui/separator";
 
 export function App() {
   const image = useEditor(selectImage);
   const filename = useEditor(selectFilename);
   const status = useEditor((s) => s.status);
+  const decodeProgress = useEditor((s) => s.decodeProgress);
   const adjustments = useEditor(selectAdjustments);
   const photoOrder = useEditor((s) => s.photoOrder);
   const photos = useEditor((s) => s.photos);
   const needsReopen = useEditor(selectNeedsReopen);
   const resetAdjustments = useEditor((s) => s.resetAdjustments);
   const setStatus = useEditor((s) => s.setStatus);
+  const setDecodeProgress = useEditor((s) => s.setDecodeProgress);
 
   const hasCatalog = photoOrder.length > 0;
 
@@ -41,13 +47,26 @@ export function App() {
     if (photoOrder.length === 0) return;
     setStatus("Exporting all photos…");
     let done = 0;
-    for (const id of photoOrder) {
+    const exportList = photoOrder.filter((id) => photos[id]?.sourceFile);
+    for (let i = 0; i < exportList.length; i++) {
+      const id = exportList[i];
       const photo = photos[id];
       if (!photo?.sourceFile) continue;
       try {
         let pixels = photo.image;
         if (!pixels) {
-          pixels = await decode(photo.sourceFile, photo.rawSettings);
+          setStatus(`Decoding ${photo.filename} (${i + 1}/${exportList.length})…`);
+          pixels = await decode(
+            photo.sourceFile,
+            photo.rawSettings,
+            createBatchProgressReporter(
+              setDecodeProgress,
+              i,
+              exportList.length,
+              `Decoding ${photo.filename}`,
+            ),
+          );
+          setDecodeProgress(null);
         }
         const blob = await exportImage(
           pixels,
@@ -59,41 +78,63 @@ export function App() {
         downloadBlob(blob, `${base}-edited.jpg`);
         done++;
       } catch (err) {
+        setDecodeProgress(null);
         setStatus(`Export failed ${photo.filename}: ${(err as Error).message}`);
         return;
       }
     }
+    setDecodeProgress(null);
     setStatus(`Exported ${done} photo(s)`);
   };
 
   return (
-    <div className="app">
-      <header className="topbar">
-        <div className="title">Photo</div>
-        <button onClick={() => document.getElementById("file-input")?.click()}>
+    <div className="relative grid h-full w-full grid-cols-[1fr_360px] grid-rows-[auto_1fr]">
+      <header className="col-span-full flex h-12 shrink-0 items-center gap-2.5 border-b border-border bg-sidebar px-4">
+        <span className="text-base font-semibold tracking-wide">Photo</span>
+        <Button
+          variant="outline"
+          onClick={() => document.getElementById("file-input")?.click()}
+        >
           Open…
-        </button>
-        <button onClick={resetAdjustments} disabled={!hasCatalog}>
+        </Button>
+        <Button variant="outline" onClick={resetAdjustments} disabled={!hasCatalog}>
           Reset
-        </button>
-        <div className="spacer" />
+        </Button>
+        <Separator orientation="vertical" className="mx-1 self-stretch" />
+        <div className="flex min-w-0 flex-1 items-center justify-center px-2">
+          {status ? (
+            <StatusPill status={status} progress={decodeProgress} />
+          ) : null}
+        </div>
         {needsReopen && (
-          <span className="topbar-hint">Settings restored — re-open files</span>
+          <Badge variant="outline" className="border-primary/40 text-primary">
+            Re-open files
+          </Badge>
         )}
-        {filename && <div className="topbar-filename">{filename}</div>}
+        {filename && (
+          <span
+            className="max-w-[220px] truncate text-base text-muted-foreground"
+            title={filename}
+          >
+            {filename}
+          </span>
+        )}
         {photoOrder.length > 1 && (
-          <span className="topbar-count">{photoOrder.length} photos</span>
+          <Badge variant="secondary">{photoOrder.length} photos</Badge>
         )}
-        <button onClick={onExportAll} disabled={photoOrder.length === 0}>
+        <Button
+          variant="outline"
+          onClick={onExportAll}
+          disabled={photoOrder.length === 0}
+        >
           Export all
-        </button>
-        <button onClick={onExport} disabled={!image}>
+        </Button>
+        <Button onClick={onExport} disabled={!image}>
           Export JPEG
-        </button>
+        </Button>
       </header>
       <Viewport />
       <Sidebar />
-      {status && <div className="toast">{status}</div>}
     </div>
   );
 }

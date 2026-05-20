@@ -17,7 +17,8 @@ export function createThumbnail(image: DecodedImage): string {
 
   for (let ty = 0; ty < h; ty++) {
     const sy = Math.min(image.height - 1, Math.floor(ty * stepY));
-    const row = image.flipY ? image.height - 1 - sy : sy;
+    // flipY=true → pixels are top-down (same as canvas); WebGL flips in the shader only.
+    const row = image.flipY ? sy : image.height - 1 - sy;
     for (let tx = 0; tx < w; tx++) {
       const sx = Math.min(image.width - 1, Math.floor(tx * stepX));
       const si = (row * image.width + sx) * 4;

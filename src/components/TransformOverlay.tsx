@@ -176,7 +176,7 @@ export function TransformOverlay({
     };
   };
 
-  const handleSize = 10;
+  const handleSize = 14;
 
   return (
     <svg
@@ -209,7 +209,7 @@ export function TransformOverlay({
         width={width}
         height={height}
         fill="none"
-        stroke="var(--accent)"
+        stroke="oklch(0.68 0.14 250)"
         strokeWidth={2}
         pointerEvents="all"
         onPointerDown={(e) => startDrag("move", e)}

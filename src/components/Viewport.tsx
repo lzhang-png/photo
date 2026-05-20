@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { decode, isRawFile } from "../editor/decode";
+import { createBatchProgressReporter } from "../editor/decodeProgress";
 import { Pipeline } from "../editor/pipeline";
 import {
   selectAdjustments,
@@ -9,6 +10,7 @@ import {
   selectSourceFile,
   useEditor,
 } from "../state/store";
+import { cn } from "@/lib/utils";
 import { Filmstrip } from "./Filmstrip";
 import { TransformOverlay } from "./TransformOverlay";
 
@@ -32,6 +34,7 @@ export function Viewport() {
   const setDecodedImage = useEditor((s) => s.setDecodedImage);
   const setGeometry = useEditor((s) => s.setGeometry);
   const setStatus = useEditor((s) => s.setStatus);
+  const setDecodeProgress = useEditor((s) => s.setDecodeProgress);
   const photoOrder = useEditor((s) => s.photoOrder);
 
   const renderFrame = (preview = cropPreview) => {
@@ -54,7 +57,11 @@ export function Viewport() {
   useEffect(() => {
     const pipe = pipelineRef.current;
     if (!pipe) return;
-    if (image) pipe.setImage(image);
+    if (image) {
+      pipe.setImage(image);
+    } else {
+      pipe.clearImage();
+    }
     renderFrame();
   }, [image]);
 
@@ -83,7 +90,16 @@ export function Viewport() {
     const timer = window.setTimeout(async () => {
       setStatus("Reprocessing RAW…");
       try {
-        const decoded = await decode(sourceFile, rawSettings);
+        const decoded = await decode(
+          sourceFile,
+          rawSettings,
+          createBatchProgressReporter(
+            setDecodeProgress,
+            0,
+            1,
+            "Reprocessing RAW",
+          ),
+        );
         if (cancelled) return;
         setDecodedImage(decoded);
         setStatus(`${decoded.width} × ${decoded.height}`);
@@ -91,14 +107,17 @@ export function Viewport() {
         if (!cancelled) {
           setStatus(`RAW failed: ${(err as Error).message}`);
         }
+      } finally {
+        if (!cancelled) setDecodeProgress(null);
       }
     }, RAW_REDECODE_MS);
 
     return () => {
       cancelled = true;
       window.clearTimeout(timer);
+      setDecodeProgress(null);
     };
-  }, [rawSettings, sourceFile, isRaw, setDecodedImage, setStatus]);
+  }, [rawSettings, sourceFile, isRaw, setDecodedImage, setStatus, setDecodeProgress]);
 
   useEffect(() => {
     if (!activePhotoId) return;
@@ -109,7 +128,16 @@ export function Viewport() {
     (async () => {
       setStatus(`Decoding ${photo.filename}…`);
       try {
-        const decoded = await decode(photo.sourceFile!, photo.rawSettings);
+        const decoded = await decode(
+          photo.sourceFile!,
+          photo.rawSettings,
+          createBatchProgressReporter(
+            setDecodeProgress,
+            0,
+            1,
+            `Decoding ${photo.filename}`,
+          ),
+        );
         if (cancelled) return;
         setDecodedImage(decoded);
         setStatus(`${decoded.width} × ${decoded.height}`);
@@ -117,13 +145,16 @@ export function Viewport() {
         if (!cancelled) {
           setStatus(`Failed: ${(err as Error).message}`);
         }
+      } finally {
+        if (!cancelled) setDecodeProgress(null);
       }
     })();
 
     return () => {
       cancelled = true;
+      setDecodeProgress(null);
     };
-  }, [activePhotoId, setDecodedImage, setStatus]);
+  }, [activePhotoId, setDecodedImage, setStatus, setDecodeProgress]);
 
   const handleFiles = async (files: FileList | null) => {
     if (!files || files.length === 0) return;
@@ -132,13 +163,21 @@ export function Viewport() {
       const file = list[i];
       const raw = isRawFile(file);
       const isLast = i === list.length - 1;
-      setStatus(
-        raw
-          ? `Decoding RAW ${file.name} (${i + 1}/${list.length})…`
-          : `Decoding ${file.name} (${i + 1}/${list.length})…`,
-      );
+      const statusLabel = raw
+        ? `Decoding RAW ${file.name} (${i + 1}/${list.length})…`
+        : `Decoding ${file.name} (${i + 1}/${list.length})…`;
+      setStatus(statusLabel);
       try {
-        const decoded = await decode(file);
+        const decoded = await decode(
+          file,
+          undefined,
+          createBatchProgressReporter(
+            setDecodeProgress,
+            i,
+            list.length,
+            statusLabel.replace(/…$/, ""),
+          ),
+        );
         addPhoto(decoded, file, raw, isLast);
         if (isLast) {
           setStatus(
@@ -147,16 +186,23 @@ export function Viewport() {
         }
       } catch (err) {
         setStatus(`Failed ${file.name}: ${(err as Error).message}`);
+        setDecodeProgress(null);
         break;
       }
     }
+    setDecodeProgress(null);
   };
 
   return (
-    <div className="viewport-wrap">
+    <div className="flex min-h-0 flex-col overflow-hidden">
       <div
         ref={viewportRef}
-        className={`viewport ${dragging ? "drag-over" : ""}${cropPreview ? " crop-editing" : ""}`}
+        className={cn(
+          "relative min-h-0 flex-1 overflow-hidden bg-[repeating-conic-gradient(#1d1d1d_0%_25%,#161616_0%_50%)] bg-size-[24px_24px]",
+          dragging &&
+            "after:pointer-events-none after:absolute after:inset-2 after:rounded-md after:border-2 after:border-dashed after:border-primary",
+          cropPreview && "[&_canvas]:pointer-events-none",
+        )}
         onDragOver={(e) => {
           e.preventDefault();
           setDragging(true);
@@ -168,7 +214,10 @@ export function Viewport() {
           handleFiles(e.dataTransfer.files);
         }}
       >
-        <canvas ref={canvasRef} />
+        <canvas
+          ref={canvasRef}
+          className="absolute inset-0 size-full object-contain object-center"
+        />
         {cropPreview && image && (
           <TransformOverlay
             image={image}
@@ -178,17 +227,17 @@ export function Viewport() {
           />
         )}
         {!image && photoOrder.length === 0 && (
-          <div className="empty">
-            <p>Drop photos here to start</p>
-            <p className="empty-hint">
+          <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-3 p-6 text-center text-base text-muted-foreground">
+            <p className="m-0">Drop photos here to start</p>
+            <p className="m-0 text-[11px] text-muted-foreground">
               JPEG, PNG, WebP, or RAW — select multiple files when opening
             </p>
           </div>
         )}
         {!image && photoOrder.length > 0 && (
-          <div className="empty">
-            <p>Re-open photos to continue editing</p>
-            <p className="empty-hint">
+          <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-3 p-6 text-center text-base text-muted-foreground">
+            <p className="m-0">Re-open photos to continue editing</p>
+            <p className="m-0 text-[11px] text-muted-foreground">
               Settings are saved — use Open… and select the same files
             </p>
           </div>
@@ -198,7 +247,7 @@ export function Viewport() {
           type="file"
           multiple
           accept="image/*,.cr2,.cr3,.nef,.arw,.dng,.raf,.rw2,.orf,.pef,.srw"
-          style={{ display: "none" }}
+          className="hidden"
           onChange={(e) => {
             handleFiles(e.target.files);
             e.target.value = "";

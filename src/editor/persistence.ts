@@ -1,6 +1,6 @@
 import type { Adjustments } from "./adjustments";
 import { migrateGeometry } from "./geometry";
-import type { RawSettings } from "./rawSettings";
+import { normalizeRawSettings, type RawSettings } from "./rawSettings";
 
 export const STORAGE_KEY = "photo-editor-session";
 
@@ -34,8 +34,10 @@ export function cloneAdjustments(adj: Adjustments): Adjustments {
   };
 }
 
-export function cloneRawSettings(raw: RawSettings): RawSettings {
-  return { ...raw };
+export function cloneRawSettings(
+  raw: Partial<RawSettings> | RawSettings,
+): RawSettings {
+  return normalizeRawSettings(raw);
 }
 
 export function serializeSession(session: PersistedSession): string {

@@ -1,7 +1,21 @@
+import { RotateCcw, RotateCw } from "lucide-react";
+import { AdjustmentSlider } from "@/components/AdjustmentSlider";
+import { SidebarSection } from "@/components/SidebarSection";
+import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Label } from "@/components/ui/label";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Slider } from "@/components/ui/slider";
+import { Toggle } from "@/components/ui/toggle";
 import {
   COLOR_SLIDERS,
-  DEFAULT_ADJUSTMENTS,
-  SliderSpec,
   TONE_SLIDERS,
 } from "../editor/adjustments";
 import {
@@ -14,7 +28,9 @@ import {
 import {
   DEFAULT_RAW_SETTINGS,
   DENOISE_OPTIONS,
+  denoiseToSelectValue,
   rawSettingsEqual,
+  selectValueToDenoise,
 } from "../editor/rawSettings";
 import { FILM_STOCKS } from "../editor/filmStocks";
 import {
@@ -25,6 +41,7 @@ import {
   useEditor,
 } from "../state/store";
 import { CurveEditor } from "./CurveEditor";
+import { cn } from "@/lib/utils";
 
 const ASPECT_PRESETS: { label: string; aspect: number | null }[] = [
   { label: "Free", aspect: null },
@@ -50,332 +67,327 @@ export function Sidebar() {
   const applyAdjustmentsToAll = useEditor((s) => s.applyAdjustmentsToAll);
   const applyRawSettingsToAll = useEditor((s) => s.applyRawSettingsToAll);
   const geom = adj.geometry;
+  const disabled = !image;
 
   return (
-    <aside className="sidebar">
-      {photoCount > 1 && (
-        <Section title="Bulk Edit">
-          <button
-            type="button"
-            className="bulk-btn"
-            onClick={applyAdjustmentsToAll}
-          >
-            Apply adjustments to all
-          </button>
-          {isRaw && (
-            <button
-              type="button"
-              className="bulk-btn"
-              onClick={applyRawSettingsToAll}
-            >
-              Apply RAW settings to all RAW
-            </button>
-          )}
-          <p className="curve-hint">
-            Copies the current photo&apos;s settings to every photo in the
-            catalog. Edits are saved automatically.
-          </p>
-        </Section>
-      )}
-      {isRaw && (
-        <Section title="RAW Develop">
-          <div className="slider-row">
-            <label htmlFor="raw-denoise">Denoise</label>
-            <select
-              id="raw-denoise"
-              className="raw-select"
-              value={raw.denoise}
-              onChange={(e) =>
-                setRawSetting("denoise", Number(e.target.value) as 0 | 1 | 2)
-              }
-            >
-              {DENOISE_OPTIONS.map((o) => (
-                <option key={o.value} value={o.value}>
-                  {o.label}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <label className="checkbox-row">
-            <input
-              type="checkbox"
-              checked={raw.autoBright}
-              onChange={(e) => setRawSetting("autoBright", e.target.checked)}
-            />
-            Auto brightness
-          </label>
-
-          <div className="slider-row">
-            <label>Demosaic</label>
-            <div className="slider-meta">
-              <span className="value">{raw.demosaicQuality}</span>
-              {raw.demosaicQuality !== DEFAULT_RAW_SETTINGS.demosaicQuality && (
-                <button
-                  className="reset"
-                  title="Reset"
-                  onClick={() =>
-                    setRawSetting(
-                      "demosaicQuality",
-                      DEFAULT_RAW_SETTINGS.demosaicQuality,
-                    )
-                  }
+    <aside className="flex min-h-0 flex-col border-l border-border bg-sidebar">
+      <ScrollArea className="min-h-0 flex-1">
+        <div className="pb-4">
+          {photoCount > 1 && (
+            <SidebarSection title="Bulk Edit">
+              <div className="space-y-2.5">
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="h-9 w-full"
+                  onClick={applyAdjustmentsToAll}
                 >
-                  ↺
-                </button>
-              )}
-            </div>
-            <input
-              type="range"
-              min={0}
-              max={12}
-              step={1}
-              value={raw.demosaicQuality}
-              onChange={(e) =>
-                setRawSetting("demosaicQuality", Number(e.target.value))
-              }
-              onDoubleClick={() =>
-                setRawSetting(
-                  "demosaicQuality",
-                  DEFAULT_RAW_SETTINGS.demosaicQuality,
-                )
-              }
-            />
-          </div>
-
-          {!rawSettingsEqual(raw, DEFAULT_RAW_SETTINGS) && (
-            <button
-              type="button"
-              className="raw-reset-all"
-              onClick={resetRawSettings}
-            >
-              Reset RAW settings
-            </button>
+                  Apply adjustments to all
+                </Button>
+                {isRaw && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="h-9 w-full"
+                    onClick={applyRawSettingsToAll}
+                  >
+                    Apply RAW settings to all RAW
+                  </Button>
+                )}
+              </div>
+              <p className="mt-2.5 text-[11px] leading-relaxed text-muted-foreground">
+                Copies the current photo&apos;s settings to every photo in the
+                catalog. Edits are saved automatically.
+              </p>
+            </SidebarSection>
           )}
-          <p className="curve-hint">
-            Changes reprocess the file (may take a few seconds).
-          </p>
-        </Section>
-      )}
 
-      <Section title="Transform">
-        <div className="geo-actions">
-          <button
-            type="button"
-            className="geo-btn"
-            title="Rotate 90° left"
-            disabled={!image}
-            onClick={() => setGeometry(rotate90CCW(geom))}
-          >
-            ↺ 90°
-          </button>
-          <button
-            type="button"
-            className="geo-btn"
-            title="Rotate 90° right"
-            disabled={!image}
-            onClick={() => setGeometry(rotate90CW(geom))}
-          >
-            90° ↻
-          </button>
-          <button
-            type="button"
-            className={`geo-btn${cropEditing ? " active" : ""}`}
-            disabled={!image}
-            onClick={() => setCropEditing(!cropEditing)}
-          >
-            {cropEditing ? "Done crop" : "Crop"}
-          </button>
-        </div>
+          {isRaw && (
+            <SidebarSection title="RAW Develop">
+              <div className="space-y-5">
+                <div className="space-y-2">
+                  <Label htmlFor="raw-denoise">Denoise</Label>
+                  <Select
+                    value={denoiseToSelectValue(raw.denoise)}
+                    onValueChange={(v) => {
+                      if (v) setRawSetting("denoise", selectValueToDenoise(v));
+                    }}
+                  >
+                    <SelectTrigger id="raw-denoise" className="w-full">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {DENOISE_OPTIONS.map((o) => (
+                        <SelectItem key={o.value} value={o.value}>
+                          {o.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
 
-        <div className="slider-row">
-          <label>Level</label>
-          <div className="slider-meta">
-            <span className="value">
-              {geom.straighten >= 0 ? "+" : ""}
-              {geom.straighten.toFixed(1)}°
-            </span>
-            {geom.straighten !== 0 && (
-              <button
-                className="reset"
-                title="Reset"
-                onClick={() => setGeometry({ straighten: 0 })}
+                <div className="flex min-h-9 items-center gap-3">
+                  <Checkbox
+                    id="raw-autobright"
+                    checked={raw.autoBright}
+                    onCheckedChange={(checked) =>
+                      setRawSetting("autoBright", checked === true)
+                    }
+                  />
+                  <Label htmlFor="raw-autobright" className="font-normal">
+                    Auto brightness
+                  </Label>
+                </div>
+                <p className="text-[11px] leading-relaxed text-muted-foreground">
+                  Off = darker, flatter linear decode. All RAW files get a soft,
+                  slightly muted develop pass after decode.
+                </p>
+
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <Label className="font-normal">Demosaic</Label>
+                    <div className="flex items-center gap-1.5">
+                      <span className="tabular-nums text-muted-foreground">
+                        {raw.demosaicQuality}
+                      </span>
+                      {raw.demosaicQuality !==
+                        DEFAULT_RAW_SETTINGS.demosaicQuality && (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon-sm"
+                          className="text-muted-foreground"
+                          title="Reset"
+                          onClick={() =>
+                            setRawSetting(
+                              "demosaicQuality",
+                              DEFAULT_RAW_SETTINGS.demosaicQuality,
+                            )
+                          }
+                        >
+                          <RotateCcw className="size-4" />
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                  <Slider
+                    min={0}
+                    max={12}
+                    step={1}
+                    value={[raw.demosaicQuality]}
+                    onValueChange={(v) => {
+                      const n = Array.isArray(v) ? v[0] : v;
+                      if (n !== undefined) setRawSetting("demosaicQuality", n);
+                    }}
+                  />
+                </div>
+
+                {!rawSettingsEqual(raw, DEFAULT_RAW_SETTINGS) && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="h-9 w-full"
+                    onClick={resetRawSettings}
+                  >
+                    Reset RAW settings
+                  </Button>
+                )}
+                <p className="text-[11px] leading-relaxed text-muted-foreground">
+                  Changes reprocess the file (may take a few seconds).
+                </p>
+              </div>
+            </SidebarSection>
+          )}
+
+          <SidebarSection title="Transform">
+            <div className="flex gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                className="h-9 flex-1"
+                title="Rotate 90° left"
+                disabled={disabled}
+                onClick={() => setGeometry(rotate90CCW(geom))}
               >
-                ↺
-              </button>
+                <RotateCcw className="size-4" />
+                90°
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                className="h-9 flex-1"
+                title="Rotate 90° right"
+                disabled={disabled}
+                onClick={() => setGeometry(rotate90CW(geom))}
+              >
+                90°
+                <RotateCw className="size-4" />
+              </Button>
+              <Button
+                type="button"
+                variant={cropEditing ? "default" : "outline"}
+                className="h-9 flex-1"
+                disabled={disabled}
+                onClick={() => setCropEditing(!cropEditing)}
+              >
+                {cropEditing ? "Done" : "Crop"}
+              </Button>
+            </div>
+
+            <div className="mt-4 space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <Label className="font-normal">Level</Label>
+                <div className="flex items-center gap-1.5">
+                  <span className="tabular-nums text-muted-foreground">
+                    {geom.straighten >= 0 ? "+" : ""}
+                    {geom.straighten.toFixed(1)}°
+                  </span>
+                  {geom.straighten !== 0 && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon-sm"
+                      className="text-muted-foreground"
+                      title="Reset"
+                      disabled={disabled}
+                      onClick={() => setGeometry({ straighten: 0 })}
+                    >
+                      <RotateCcw className="size-4" />
+                    </Button>
+                  )}
+                </div>
+              </div>
+              <Slider
+                min={-15}
+                max={15}
+                step={0.1}
+                value={[geom.straighten]}
+                disabled={disabled}
+                onValueChange={(v) => {
+                  const n = Array.isArray(v) ? v[0] : v;
+                  if (n !== undefined) setGeometry({ straighten: n });
+                }}
+              />
+            </div>
+
+            <p className="mt-4 mb-2 text-[11px] text-muted-foreground">
+              Aspect ratio
+            </p>
+            <div className="grid grid-cols-3 gap-2">
+              {ASPECT_PRESETS.map((p) => (
+                <Button
+                  key={p.label}
+                  type="button"
+                  variant="outline"
+                  className="h-9"
+                  disabled={disabled || p.aspect === null}
+                  onClick={() => {
+                    if (!image) return;
+                    if (p.aspect === null) return;
+                    if (p.aspect === -1) {
+                      setGeometry({
+                        cropX: 0,
+                        cropY: 0,
+                        cropW: 1,
+                        cropH: 1,
+                      });
+                      return;
+                    }
+                    setGeometry(
+                      cropToAspect(image.width, image.height, p.aspect, geom),
+                    );
+                  }}
+                >
+                  {p.label}
+                </Button>
+              ))}
+            </div>
+
+            {!isDefaultGeometry(geom) && (
+              <Button
+                type="button"
+                variant="outline"
+                className="mt-3 h-9 w-full"
+                disabled={disabled}
+                onClick={() => setGeometry(DEFAULT_GEOMETRY)}
+              >
+                Reset transform
+              </Button>
             )}
-          </div>
-          <input
-            type="range"
-            min={-15}
-            max={15}
-            step={0.1}
-            value={geom.straighten}
-            disabled={!image}
-            onChange={(e) =>
-              setGeometry({ straighten: parseFloat(e.target.value) })
-            }
-            onDoubleClick={() => setGeometry({ straighten: 0 })}
-          />
+            <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
+              Crop: drag handles in crop mode · Level straightens horizons
+            </p>
+          </SidebarSection>
+
+          <SidebarSection title="Light">
+            <div className="space-y-5">
+              {TONE_SLIDERS.map((s) => (
+                <AdjustmentSlider
+                  key={s.key}
+                  spec={s}
+                  value={adj[s.key]}
+                  disabled={disabled}
+                  onChange={(v) => setAdjustment(s.key, v)}
+                />
+              ))}
+            </div>
+          </SidebarSection>
+
+          <SidebarSection title="Color">
+            <div className="space-y-5">
+              {COLOR_SLIDERS.map((s) => (
+                <AdjustmentSlider
+                  key={s.key}
+                  spec={s}
+                  value={adj[s.key]}
+                  disabled={disabled}
+                  onChange={(v) => setAdjustment(s.key, v)}
+                />
+              ))}
+            </div>
+          </SidebarSection>
+
+          <SidebarSection title="Film">
+            <div className="grid grid-cols-2 gap-2">
+              {FILM_STOCKS.map((stock) => (
+                <Toggle
+                  key={stock.id}
+                  variant="outline"
+                  className={cn(
+                    "h-auto min-h-9 px-2.5 py-2 leading-tight",
+                    adj.film === stock.id &&
+                      "border-primary bg-primary/15 text-foreground",
+                  )}
+                  pressed={adj.film === stock.id}
+                  title={stock.hint}
+                  onPressedChange={() => setAdjustment("film", stock.id)}
+                >
+                  {stock.label}
+                </Toggle>
+              ))}
+            </div>
+            {adj.film !== "none" && (
+              <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
+                {FILM_STOCKS.find((s) => s.id === adj.film)?.hint}
+              </p>
+            )}
+          </SidebarSection>
+
+          <section className="px-4 py-4">
+            <h3 className="mb-3 text-base font-medium uppercase tracking-wider text-muted-foreground">
+              Tone Curve
+            </h3>
+            <CurveEditor
+              points={adj.curve}
+              onChange={(c) => setAdjustment("curve", c)}
+            />
+            <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
+              Drag points · click to add · double-click point to remove ·
+              double-click background to reset
+            </p>
+          </section>
         </div>
-
-        <p className="curve-hint geo-hint">Aspect ratio</p>
-        <div className="aspect-grid">
-          {ASPECT_PRESETS.map((p) => (
-            <button
-              key={p.label}
-              type="button"
-              className="aspect-chip"
-              disabled={!image}
-              onClick={() => {
-                if (!image) return;
-                if (p.aspect === null) return;
-                if (p.aspect === -1) {
-                  setGeometry({
-                    cropX: 0,
-                    cropY: 0,
-                    cropW: 1,
-                    cropH: 1,
-                  });
-                  return;
-                }
-                setGeometry(
-                  cropToAspect(image.width, image.height, p.aspect, geom),
-                );
-              }}
-            >
-              {p.label}
-            </button>
-          ))}
-        </div>
-
-        {!isDefaultGeometry(geom) && (
-          <button
-            type="button"
-            className="raw-reset-all"
-            disabled={!image}
-            onClick={() => setGeometry(DEFAULT_GEOMETRY)}
-          >
-            Reset transform
-          </button>
-        )}
-        <p className="curve-hint">
-          Crop: drag handles in crop mode · Level straightens horizons
-        </p>
-      </Section>
-
-      <Section title="Light">
-        {TONE_SLIDERS.map((s) => (
-          <Slider
-            key={s.key}
-            spec={s}
-            value={adj[s.key]}
-            onChange={(v) => setAdjustment(s.key, v)}
-          />
-        ))}
-      </Section>
-
-      <Section title="Color">
-        {COLOR_SLIDERS.map((s) => (
-          <Slider
-            key={s.key}
-            spec={s}
-            value={adj[s.key]}
-            onChange={(v) => setAdjustment(s.key, v)}
-          />
-        ))}
-      </Section>
-
-      <Section title="Film">
-        <div className="film-grid">
-          {FILM_STOCKS.map((stock) => (
-            <button
-              key={stock.id}
-              type="button"
-              className={`film-chip${adj.film === stock.id ? " active" : ""}`}
-              title={stock.hint}
-              onClick={() => setAdjustment("film", stock.id)}
-            >
-              {stock.label}
-            </button>
-          ))}
-        </div>
-        {adj.film !== "none" && (
-          <p className="curve-hint">
-            {FILM_STOCKS.find((s) => s.id === adj.film)?.hint}
-          </p>
-        )}
-      </Section>
-
-      <Section title="Tone Curve">
-        <CurveEditor
-          points={adj.curve}
-          onChange={(c) => setAdjustment("curve", c)}
-        />
-        <p className="curve-hint">
-          Drag points · click to add · double-click point to remove · double-click
-          background to reset
-        </p>
-      </Section>
+      </ScrollArea>
     </aside>
   );
-}
-
-function Section({
-  title,
-  children,
-}: {
-  title: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className="section">
-      <h3>{title}</h3>
-      {children}
-    </div>
-  );
-}
-
-function Slider({
-  spec,
-  value,
-  onChange,
-}: {
-  spec: SliderSpec;
-  value: number;
-  onChange: (v: number) => void;
-}) {
-  const def = DEFAULT_ADJUSTMENTS[spec.key];
-  const display = formatValue(value, spec);
-  return (
-    <div className="slider-row">
-      <label>{spec.label}</label>
-      <div className="slider-meta">
-        <span className="value">{display}</span>
-        {value !== def && (
-          <button
-            className="reset"
-            title="Reset"
-            onClick={() => onChange(def as number)}
-          >
-            ↺
-          </button>
-        )}
-      </div>
-      <input
-        type="range"
-        min={spec.min}
-        max={spec.max}
-        step={spec.step}
-        value={value}
-        onChange={(e) => onChange(parseFloat(e.target.value))}
-        onDoubleClick={() => onChange(def as number)}
-      />
-    </div>
-  );
-}
-
-function formatValue(v: number, spec: SliderSpec) {
-  if (spec.key === "exposure") return `${v >= 0 ? "+" : ""}${v.toFixed(2)} EV`;
-  return Math.round(v * 100).toString();
 }

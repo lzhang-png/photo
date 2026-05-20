@@ -58,7 +58,7 @@
           preview.height = h;
           const ctx = preview.getContext("2d");
           const rgba = new Uint8ClampedArray(img.pixels);
-          if (img.flipY) {
+          if (!img.flipY) {
             const flipped = new Uint8ClampedArray(rgba.length);
             const row = img.width * 4;
             for (let y = 0; y < img.height; y++) {

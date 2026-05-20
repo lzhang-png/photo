@@ -1,3 +1,4 @@
+import type { DecodeProgressCallback } from "./decodeProgress";
 import { DEFAULT_RAW_SETTINGS, toLibrawOptions, type RawSettings } from "./rawSettings";
 
 type LibRawCtor = typeof import("libraw-wasm").default;
@@ -31,11 +32,16 @@ export type RawDecodeResult = {
 export async function decodeWithLibraw(
   file: File,
   settings: RawSettings = DEFAULT_RAW_SETTINGS,
+  onProgress?: DecodeProgressCallback,
 ): Promise<RawDecodeResult> {
+  const report = (value: number, label?: string) => onProgress?.(value, label);
+
+  report(0.05, "Reading file");
   const lr = await createLibRaw();
   const buffer = new Uint8Array(await file.arrayBuffer());
 
   const tryOpen = async (halfSize: boolean) => {
+    report(halfSize ? 0.35 : 0.2, halfSize ? "Demosaicing (preview)" : "Demosaicing");
     await lr.open(buffer, {
       ...toLibrawOptions(settings),
       halfSize,
@@ -52,7 +58,10 @@ export async function decodeWithLibraw(
     }
   }
 
+  report(0.72, "Reading metadata");
   const meta = (await lr.metadata(false)) as Record<string, unknown>;
+  report(0.88, "Extracting pixels");
   const image = await lr.imageData();
+  report(1, "Finishing");
   return { image, meta };
 }
