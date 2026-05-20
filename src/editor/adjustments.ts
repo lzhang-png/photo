@@ -39,6 +39,15 @@ export const DEFAULT_ADJUSTMENTS: Adjustments = {
   curve: DEFAULT_CURVE.map((p) => ({ ...p })),
 };
 
+/** Hold-to-compare: decoded look with current crop, no edit sliders. */
+export function originalPreviewAdjustments(adj: Adjustments): Adjustments {
+  return {
+    ...DEFAULT_ADJUSTMENTS,
+    geometry: cloneGeometry(adj.geometry),
+    curve: DEFAULT_CURVE.map((p) => ({ ...p })),
+  };
+}
+
 export type SliderSpec = {
   key: keyof Omit<Adjustments, "curve" | "film" | "geometry">;
   label: string;

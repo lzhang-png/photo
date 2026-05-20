@@ -1,4 +1,7 @@
-import { useEffect, useRef, useState } from "react";
+import { Eye, Minus, Plus, RotateCcw } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { originalPreviewAdjustments } from "../editor/adjustments";
+import { Button } from "@/components/ui/button";
 import { decode, isRawFile } from "../editor/decode";
 import { createBatchProgressReporter } from "../editor/decodeProgress";
 import { Pipeline } from "../editor/pipeline";
@@ -15,13 +18,54 @@ import { Filmstrip } from "./Filmstrip";
 import { TransformOverlay } from "./TransformOverlay";
 
 const RAW_REDECODE_MS = 400;
+const ZOOM_MIN = 1;
+const ZOOM_MAX = 4;
+const ZOOM_STEP = 1.25;
+const COMPARE_CLICK_MS = 2000;
+const COMPARE_HOLD_THRESHOLD_MS = 250;
+
+function clampZoom(z: number) {
+  return Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, z));
+}
+
+type Pan = { x: number; y: number };
+
+function clampPan(
+  pan: Pan,
+  zoom: number,
+  viewportW: number,
+  viewportH: number,
+): Pan {
+  if (zoom <= 1) return { x: 0, y: 0 };
+  const maxX = (viewportW * (zoom - 1)) / 2;
+  const maxY = (viewportH * (zoom - 1)) / 2;
+  return {
+    x: Math.max(-maxX, Math.min(maxX, pan.x)),
+    y: Math.max(-maxY, Math.min(maxY, pan.y)),
+  };
+}
 
 export function Viewport() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
   const pipelineRef = useRef<Pipeline | null>(null);
   const skipRawRedecodeRef = useRef(true);
+  const compareOriginalRef = useRef(false);
+  const compareTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const compareDownAtRef = useRef(0);
+  const comparePointerActiveRef = useRef(false);
+  const panDragRef = useRef({
+    active: false,
+    startX: 0,
+    startY: 0,
+    startPanX: 0,
+    startPanY: 0,
+  });
   const [dragging, setDragging] = useState(false);
+  const [compareOriginal, setCompareOriginal] = useState(false);
+  const [zoom, setZoom] = useState(1);
+  const [pan, setPan] = useState<Pan>({ x: 0, y: 0 });
+  const [isPanning, setIsPanning] = useState(false);
   const cropPreview = useEditor((s) => s.cropEditing);
 
   const image = useEditor(selectImage);
@@ -37,12 +81,130 @@ export function Viewport() {
   const setDecodeProgress = useEditor((s) => s.setDecodeProgress);
   const photoOrder = useEditor((s) => s.photoOrder);
 
-  const renderFrame = (preview = cropPreview) => {
-    const pipe = pipelineRef.current;
-    if (!pipe) return;
-    const adj = selectAdjustments(useEditor.getState());
-    pipe.fitToContainer(adj, preview);
-    pipe.render(adj, preview);
+  const renderFrame = useCallback(
+    (preview = cropPreview) => {
+      const pipe = pipelineRef.current;
+      if (!pipe) return;
+      const adj = selectAdjustments(useEditor.getState());
+      const renderAdj = compareOriginalRef.current
+        ? originalPreviewAdjustments(adj)
+        : adj;
+      pipe.fitToContainer(adj, preview);
+      pipe.render(renderAdj, preview);
+    },
+    [cropPreview],
+  );
+
+  const startCompare = useCallback(() => {
+    if (compareOriginalRef.current) return;
+    compareOriginalRef.current = true;
+    setCompareOriginal(true);
+    renderFrame();
+  }, [renderFrame]);
+
+  const endCompare = useCallback(() => {
+    if (compareTimeoutRef.current) {
+      clearTimeout(compareTimeoutRef.current);
+      compareTimeoutRef.current = null;
+    }
+    if (!compareOriginalRef.current) return;
+    compareOriginalRef.current = false;
+    setCompareOriginal(false);
+    renderFrame();
+  }, [renderFrame]);
+
+  const finishComparePointer = useCallback(
+    (downAt: number) => {
+      const heldMs = Date.now() - downAt;
+      if (heldMs >= COMPARE_HOLD_THRESHOLD_MS) {
+        endCompare();
+      } else {
+        compareTimeoutRef.current = setTimeout(() => {
+          compareTimeoutRef.current = null;
+          endCompare();
+        }, COMPARE_CLICK_MS);
+      }
+    },
+    [endCompare],
+  );
+
+  const applyPan = useCallback(
+    (next: Pan) => {
+      const el = viewportRef.current;
+      if (!el) {
+        setPan(next);
+        return;
+      }
+      setPan(clampPan(next, zoom, el.clientWidth, el.clientHeight));
+    },
+    [zoom],
+  );
+
+  const isZoomedIn = zoom > ZOOM_MIN + 1e-6;
+
+  const resetView = useCallback(() => {
+    panDragRef.current.active = false;
+    setIsPanning(false);
+    setZoom(1);
+    setPan({ x: 0, y: 0 });
+  }, []);
+
+  const onComparePointerDown = (e: React.PointerEvent<HTMLButtonElement>) => {
+    if (!image || cropPreview) return;
+    e.preventDefault();
+    if (compareTimeoutRef.current) {
+      clearTimeout(compareTimeoutRef.current);
+      compareTimeoutRef.current = null;
+    }
+    compareDownAtRef.current = Date.now();
+    comparePointerActiveRef.current = true;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    startCompare();
+  };
+
+  const onComparePointerEnd = (e: React.PointerEvent<HTMLButtonElement>) => {
+    if (!comparePointerActiveRef.current) return;
+    comparePointerActiveRef.current = false;
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    }
+    finishComparePointer(compareDownAtRef.current);
+  };
+
+  const onCompareLostPointerCapture = () => {
+    if (!comparePointerActiveRef.current) return;
+    comparePointerActiveRef.current = false;
+    finishComparePointer(compareDownAtRef.current);
+  };
+
+  const onCanvasPointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    if (!image || cropPreview || e.button !== 0 || zoom <= 1) return;
+    panDragRef.current = {
+      active: true,
+      startX: e.clientX,
+      startY: e.clientY,
+      startPanX: pan.x,
+      startPanY: pan.y,
+    };
+    setIsPanning(true);
+    e.currentTarget.setPointerCapture(e.pointerId);
+  };
+
+  const onCanvasPointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    const p = panDragRef.current;
+    if (!p.active) return;
+    applyPan({
+      x: p.startPanX + (e.clientX - p.startX),
+      y: p.startPanY + (e.clientY - p.startY),
+    });
+  };
+
+  const endPan = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    panDragRef.current.active = false;
+    setIsPanning(false);
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    }
   };
 
   useEffect(() => {
@@ -67,7 +229,14 @@ export function Viewport() {
 
   useEffect(() => {
     renderFrame();
-  }, [adjustments, cropPreview]);
+  }, [adjustments, cropPreview, renderFrame]);
+
+  useEffect(() => {
+    if (!cropPreview) return;
+    endCompare();
+  }, [cropPreview, endCompare]);
+
+  useEffect(() => () => endCompare(), [endCompare]);
 
   useEffect(() => {
     const onResize = () => renderFrame();
@@ -78,6 +247,23 @@ export function Viewport() {
   useEffect(() => {
     skipRawRedecodeRef.current = true;
   }, [activePhotoId, sourceFile]);
+
+  useEffect(() => {
+    setZoom(1);
+    setPan({ x: 0, y: 0 });
+  }, [activePhotoId, image?.width, image?.height]);
+
+  useEffect(() => {
+    if (zoom <= 1) {
+      setPan({ x: 0, y: 0 });
+      return;
+    }
+    setPan((p) => {
+      const el = viewportRef.current;
+      if (!el) return p;
+      return clampPan(p, zoom, el.clientWidth, el.clientHeight);
+    });
+  }, [zoom]);
 
   useEffect(() => {
     if (!sourceFile || !isRaw) return;
@@ -198,7 +384,7 @@ export function Viewport() {
       <div
         ref={viewportRef}
         className={cn(
-          "relative min-h-0 flex-1 overflow-hidden bg-[repeating-conic-gradient(#1d1d1d_0%_25%,#161616_0%_50%)] bg-size-[24px_24px]",
+          "group/viewport relative min-h-0 flex-1 overflow-hidden bg-[repeating-conic-gradient(#1d1d1d_0%_25%,#161616_0%_50%)] bg-size-[24px_24px]",
           dragging &&
             "after:pointer-events-none after:absolute after:inset-2 after:rounded-md after:border-2 after:border-dashed after:border-primary",
           cropPreview && "[&_canvas]:pointer-events-none",
@@ -216,8 +402,108 @@ export function Viewport() {
       >
         <canvas
           ref={canvasRef}
-          className="absolute inset-0 size-full object-contain object-center"
+          className={cn(
+            "absolute inset-0 size-full origin-center object-contain object-center",
+            !isPanning && "transition-transform duration-150 ease-out",
+            image &&
+              !cropPreview &&
+              zoom > 1 &&
+              (isPanning ? "cursor-grabbing" : "cursor-grab"),
+          )}
+          style={{
+            transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
+          }}
+          onPointerDown={onCanvasPointerDown}
+          onPointerMove={onCanvasPointerMove}
+          onPointerUp={endPan}
+          onPointerCancel={endPan}
+          onLostPointerCapture={() => {
+            panDragRef.current.active = false;
+            setIsPanning(false);
+          }}
         />
+        {image && (
+          <div
+            className={cn(
+              "absolute right-3 bottom-3 z-20 flex items-center gap-0.5 rounded-lg border border-border bg-sidebar/95 p-0.5 shadow-md backdrop-blur-sm",
+              "pointer-events-none opacity-0 transition-opacity duration-200",
+              "group-hover/viewport:pointer-events-auto group-hover/viewport:opacity-100",
+            )}
+          >
+            <Button
+              type="button"
+              variant={compareOriginal ? "secondary" : "ghost"}
+              size="sm"
+              className="h-8 gap-1.5 px-2.5 text-xs select-none"
+              title="Click for 2s preview, hold to compare"
+              disabled={cropPreview}
+              onPointerDown={onComparePointerDown}
+              onPointerUp={onComparePointerEnd}
+              onPointerCancel={onComparePointerEnd}
+              onLostPointerCapture={onCompareLostPointerCapture}
+            >
+              <Eye className="size-3.5" />
+              Original
+            </Button>
+            <div className="mx-0.5 w-px self-stretch bg-border" />
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              className={cn(
+                "text-muted-foreground",
+                !isZoomedIn && "pointer-events-none w-0 min-w-0 overflow-hidden p-0 opacity-0",
+              )}
+              title="Reset zoom and pan"
+              disabled={!isZoomedIn || cropPreview}
+              tabIndex={isZoomedIn ? 0 : -1}
+              aria-hidden={!isZoomedIn}
+              onClick={resetView}
+            >
+              <RotateCcw className="size-4" />
+            </Button>
+            <div
+              className={cn(
+                "mx-0.5 w-px self-stretch bg-border",
+                !isZoomedIn && "opacity-0",
+              )}
+            />
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              title="Zoom out"
+              disabled={zoom <= ZOOM_MIN + 1e-6}
+              onClick={() => {
+                setZoom((z) => {
+                  const next = clampZoom(z / ZOOM_STEP);
+                  if (next <= 1) setPan({ x: 0, y: 0 });
+                  return next;
+                });
+              }}
+            >
+              <Minus className="size-4" />
+            </Button>
+            <span className="min-w-11 px-1 text-center text-xs tabular-nums text-muted-foreground">
+              {Math.round(zoom * 100)}%
+            </span>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              title="Zoom in"
+              disabled={zoom >= ZOOM_MAX - 1e-6}
+              onClick={() => setZoom((z) => clampZoom(z * ZOOM_STEP))}
+            >
+              <Plus className="size-4" />
+            </Button>
+          </div>
+        )}
+        {compareOriginal && (
+          <div className="pointer-events-none absolute top-3 left-1/2 z-10 -translate-x-1/2 rounded-md bg-black/70 px-2.5 py-1 text-xs font-medium text-white">
+            Original
+          </div>
+        )}
         {cropPreview && image && (
           <TransformOverlay
             image={image}
