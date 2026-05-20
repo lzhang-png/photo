@@ -7,6 +7,10 @@ dist-ssr
 .env
 .env.local
 
+# Local RAW samples for manual decode testing
+test-fixtures/
+public/test-fixtures/
+
 # TS build outputs
 *.tsbuildinfo
 vite.config.d.ts

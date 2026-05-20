@@ -1,9 +1,17 @@
 import { useEffect, useRef } from "react";
-import { buildCurveLUT } from "../editor/curve";
+import {
+  buildCurveLUT,
+  clampPointX,
+  DEFAULT_CURVE,
+  evaluateCurve,
+  insertPointOnCurve,
+  removePoint,
+  type CurvePoint,
+} from "../editor/curve";
 
 type Props = {
-  points: [number, number, number, number];
-  onChange: (pts: [number, number, number, number]) => void;
+  points: CurvePoint[];
+  onChange: (pts: CurvePoint[]) => void;
 };
 
 const SIZE = 200;
@@ -11,9 +19,6 @@ const SIZE = 200;
 export function CurveEditor({ points, onChange }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const dragRef = useRef<number | null>(null);
-
-  // Anchors in normalized [0,1] x: 0, 1/3, 2/3, 1
-  const xs: [number, number, number, number] = [0, 1 / 3, 2 / 3, 1];
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -60,43 +65,72 @@ export function CurveEditor({ points, onChange }: Props) {
     }
     ctx.stroke();
 
-    // Anchors.
-    for (let i = 0; i < 4; i++) {
-      const x = xs[i] * SIZE;
-      const y = SIZE - points[i] * SIZE;
-      ctx.fillStyle = "#4aa3ff";
+    // Control points.
+    const sorted = [...points].sort((a, b) => a.x - b.x);
+    for (let i = 0; i < sorted.length; i++) {
+      const { x, y } = sorted[i];
+      const px = x * SIZE;
+      const py = SIZE - y * SIZE;
+      const isEnd = i === 0 || i === sorted.length - 1;
+      ctx.fillStyle = isEnd ? "#7eb6ff" : "#4aa3ff";
       ctx.beginPath();
-      ctx.arc(x, y, 4, 0, Math.PI * 2);
+      ctx.arc(px, py, isEnd ? 5 : 4, 0, Math.PI * 2);
       ctx.fill();
     }
   }, [points]);
 
+  const toLocal = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const sx = SIZE / rect.width;
+    const sy = SIZE / rect.height;
+    return {
+      px: (e.clientX - rect.left) * sx,
+      py: (e.clientY - rect.top) * sy,
+    };
+  };
+
   const hitTest = (px: number, py: number) => {
-    for (let i = 0; i < 4; i++) {
-      const x = xs[i] * SIZE;
-      const y = SIZE - points[i] * SIZE;
+    for (let i = 0; i < points.length; i++) {
+      const x = points[i].x * SIZE;
+      const y = SIZE - points[i].y * SIZE;
       if (Math.hypot(px - x, py - y) < 10) return i;
     }
     return null;
   };
 
+  const commit = (next: CurvePoint[]) =>
+    onChange([...next].sort((a, b) => a.x - b.x));
+
   const onPointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    const rect = e.currentTarget.getBoundingClientRect();
-    const px = e.clientX - rect.left;
-    const py = e.clientY - rect.top;
+    const { px, py } = toLocal(e);
     const idx = hitTest(px, py);
-    if (idx === null) return;
-    dragRef.current = idx;
-    e.currentTarget.setPointerCapture(e.pointerId);
+    if (idx !== null) {
+      dragRef.current = idx;
+      e.currentTarget.setPointerCapture(e.pointerId);
+      return;
+    }
+
+    // Click empty area: add a point on the curve.
+    const x = Math.max(0, Math.min(1, px / SIZE));
+    const y = evaluateCurve(points, x);
+    commit(insertPointOnCurve(points, x, y));
   };
 
   const onPointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
     if (dragRef.current === null) return;
-    const rect = e.currentTarget.getBoundingClientRect();
-    const py = e.clientY - rect.top;
-    const y = Math.max(0, Math.min(1, 1 - py / SIZE));
-    const next = [...points] as [number, number, number, number];
-    next[dragRef.current] = y;
+    const { px, py } = toLocal(e);
+    const idx = dragRef.current;
+    const isStart = idx === 0;
+    const isEnd = idx === points.length - 1;
+
+    let x = Math.max(0, Math.min(1, px / SIZE));
+    let y = Math.max(0, Math.min(1, 1 - py / SIZE));
+
+    if (isStart) x = 0;
+    else if (isEnd) x = 1;
+    else x = clampPointX(points, idx, x);
+
+    const next = points.map((p, i) => (i === idx ? { x, y } : { ...p }));
     onChange(next);
   };
 
@@ -104,15 +138,42 @@ export function CurveEditor({ points, onChange }: Props) {
     dragRef.current = null;
   };
 
+  const onDoubleClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    const { px, py } = (() => {
+      const rect = e.currentTarget.getBoundingClientRect();
+      const sx = SIZE / rect.width;
+      const sy = SIZE / rect.height;
+      return {
+        px: (e.clientX - rect.left) * sx,
+        py: (e.clientY - rect.top) * sy,
+      };
+    })();
+
+    const idx = hitTest(px, py);
+    if (idx !== null && idx > 0 && idx < points.length - 1) {
+      commit(removePoint(points, idx));
+      return;
+    }
+
+    commit(DEFAULT_CURVE.map((p) => ({ ...p })));
+  };
+
   return (
     <canvas
       ref={canvasRef}
-      style={{ width: "100%", aspectRatio: "1 / 1", display: "block", borderRadius: 3 }}
+      style={{
+        width: "100%",
+        aspectRatio: "1 / 1",
+        display: "block",
+        borderRadius: 3,
+        touchAction: "none",
+        cursor: "crosshair",
+      }}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
       onPointerCancel={onPointerUp}
-      onDoubleClick={() => onChange([0, 0.25, 0.75, 1])}
+      onDoubleClick={onDoubleClick}
     />
   );
 }

@@ -1,3 +1,12 @@
+import type { CurvePoint } from "./curve";
+import { DEFAULT_CURVE } from "./curve";
+import type { FilmId } from "./filmStocks";
+import {
+  cloneGeometry,
+  DEFAULT_GEOMETRY,
+  type Geometry,
+} from "./geometry";
+
 export type Adjustments = {
   exposure: number;
   contrast: number;
@@ -9,7 +18,9 @@ export type Adjustments = {
   tint: number;
   vibrance: number;
   saturation: number;
-  curve: [number, number, number, number];
+  film: FilmId;
+  geometry: Geometry;
+  curve: CurvePoint[];
 };
 
 export const DEFAULT_ADJUSTMENTS: Adjustments = {
@@ -23,11 +34,13 @@ export const DEFAULT_ADJUSTMENTS: Adjustments = {
   tint: 0,
   vibrance: 0,
   saturation: 0,
-  curve: [0, 0.25, 0.75, 1],
+  film: "none",
+  geometry: cloneGeometry(DEFAULT_GEOMETRY),
+  curve: DEFAULT_CURVE.map((p) => ({ ...p })),
 };
 
 export type SliderSpec = {
-  key: keyof Omit<Adjustments, "curve">;
+  key: keyof Omit<Adjustments, "curve" | "film" | "geometry">;
   label: string;
   min: number;
   max: number;

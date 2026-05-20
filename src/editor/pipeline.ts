@@ -1,5 +1,7 @@
 import { Adjustments } from "./adjustments";
 import { buildCurveLUT } from "./curve";
+import { FILM_SHADER_INDEX } from "./filmStocks";
+import { getOutputSize, rotationRadians } from "./geometry";
 import { FRAG_SRC, VERT_SRC } from "./shaders";
 
 export type DecodedImage = {
@@ -74,6 +76,11 @@ export class Pipeline {
       "u_vibrance",
       "u_saturation",
       "u_flipY",
+      "u_film",
+      "u_crop",
+      "u_cropSize",
+      "u_angle",
+      "u_cropPreview",
     ]) {
       uniforms[name] = gl.getUniformLocation(program, name);
     }
@@ -111,7 +118,7 @@ export class Pipeline {
   }
 
   // Fit canvas to its CSS container, preserving image aspect.
-  fitToContainer() {
+  fitToContainer(adj?: Adjustments, cropPreview = false) {
     const { gl, image } = this.state;
     const canvas = gl.canvas as HTMLCanvasElement;
     const cw = canvas.clientWidth;
@@ -124,9 +131,13 @@ export class Pipeline {
       gl.viewport(0, 0, w, h);
       return;
     }
-    const scale = Math.min(cw / image.width, ch / image.height);
-    const tw = Math.max(1, Math.floor(image.width * scale * devicePixelRatio));
-    const th = Math.max(1, Math.floor(image.height * scale * devicePixelRatio));
+    const frame =
+      adj && !cropPreview
+        ? getOutputSize(image.width, image.height, adj.geometry)
+        : { width: image.width, height: image.height };
+    const scale = Math.min(cw / frame.width, ch / frame.height);
+    const tw = Math.max(1, Math.floor(frame.width * scale * devicePixelRatio));
+    const th = Math.max(1, Math.floor(frame.height * scale * devicePixelRatio));
     canvas.width = tw;
     canvas.height = th;
     gl.viewport(0, 0, tw, th);
@@ -141,13 +152,27 @@ export class Pipeline {
     gl.viewport(0, 0, width, height);
   }
 
-  render(adj: Adjustments) {
+  render(adj: Adjustments, cropPreview = false) {
     const { gl, uniforms, curveTex, image } = this.state;
     if (!image) {
       gl.clearColor(0, 0, 0, 0);
       gl.clear(gl.COLOR_BUFFER_BIT);
       return;
     }
+
+    const g = adj.geometry;
+    const cropSizeX = Math.max(1, g.cropW * image.width);
+    const cropSizeY = Math.max(1, g.cropH * image.height);
+    gl.uniform4f(
+      uniforms.u_crop!,
+      g.cropX,
+      g.cropY,
+      g.cropW,
+      g.cropH,
+    );
+    gl.uniform2f(uniforms.u_cropSize!, cropSizeX, cropSizeY);
+    gl.uniform1f(uniforms.u_angle!, rotationRadians(g));
+    gl.uniform1f(uniforms.u_cropPreview!, cropPreview ? 1.0 : 0.0);
 
     // Upload curve LUT as a 256x1 luminance texture.
     const lut = buildCurveLUT(adj.curve);
@@ -177,6 +202,7 @@ export class Pipeline {
     gl.uniform1f(uniforms.u_vibrance!, adj.vibrance);
     gl.uniform1f(uniforms.u_saturation!, adj.saturation);
     gl.uniform1f(uniforms.u_flipY!, image.flipY ? 1.0 : 0.0);
+    gl.uniform1f(uniforms.u_film!, FILM_SHADER_INDEX[adj.film]);
 
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   }

@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>RAW decode test</title>
+    <style>
+      body {
+        font-family: system-ui, sans-serif;
+        padding: 16px;
+        background: #111;
+        color: #eee;
+      }
+      pre {
+        white-space: pre-wrap;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>RAW decode test</h1>
+    <p>
+      Isolated: <span id="iso">…</span> · SAB:
+      <span id="sab">…</span>
+    </p>
+    <input type="file" id="file" accept=".cr2,.cr3,.nef,.arw,.dng" />
+    <canvas id="preview" style="max-width: 100%; margin-top: 12px; background: #222"></canvas>
+    <pre id="out">Pick a RAW file or wait for auto-test…</pre>
+    <script type="module">
+      import { decode, isRawFile } from "/src/editor/decode.ts";
+
+      document.getElementById("iso").textContent = String(
+        window.crossOriginIsolated,
+      );
+      document.getElementById("sab").textContent = String(
+        typeof SharedArrayBuffer !== "undefined",
+      );
+
+      const out = document.getElementById("out");
+      const preview = document.getElementById("preview");
+      const log = (s) => {
+        out.textContent += s + "\n";
+      };
+
+      async function run(file) {
+        out.textContent = "";
+        log(`File: ${file.name} (${(file.size / 1e6).toFixed(1)} MB)`);
+        log(`isRaw: ${isRawFile(file)}`);
+        const t0 = performance.now();
+        try {
+          const img = await decode(file);
+          log(
+            `OK ${img.width}×${img.height} rgba=${img.pixels.length} (${((performance.now() - t0) / 1000).toFixed(1)}s)`,
+          );
+          const max = 640;
+          const scale = max / Math.max(img.width, img.height);
+          const w = Math.max(1, Math.round(img.width * scale));
+          const h = Math.max(1, Math.round(img.height * scale));
+          preview.width = w;
+          preview.height = h;
+          const ctx = preview.getContext("2d");
+          const rgba = new Uint8ClampedArray(img.pixels);
+          if (img.flipY) {
+            const flipped = new Uint8ClampedArray(rgba.length);
+            const row = img.width * 4;
+            for (let y = 0; y < img.height; y++) {
+              const src = y * row;
+              const dst = (img.height - 1 - y) * row;
+              flipped.set(rgba.subarray(src, src + row), dst);
+            }
+            ctx.putImageData(new ImageData(flipped, img.width, img.height), 0, 0, 0, 0, w, h);
+          } else {
+            ctx.putImageData(new ImageData(rgba, img.width, img.height), 0, 0, 0, 0, w, h);
+          }
+        } catch (e) {
+          log(`ERROR: ${e.message}`);
+          if (e.stack) log(e.stack);
+          preview.width = 0;
+          preview.height = 0;
+        }
+      }
+
+      document.getElementById("file").addEventListener("change", (e) => {
+        const f = e.target.files?.[0];
+        if (f) run(f);
+      });
+
+      try {
+        const r = await fetch("/test-fixtures/sample.cr2");
+        const buf = await r.arrayBuffer();
+        await run(new File([buf], "sample.cr2", { type: "image/x-canon-cr2" }));
+      } catch (e) {
+        log(`Auto-test fetch failed: ${e.message}`);
+      }
+    </script>
+  </body>
+</html>

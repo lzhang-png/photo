@@ -1,29 +1,383 @@
 import { create } from "zustand";
 import { Adjustments, DEFAULT_ADJUSTMENTS } from "../editor/adjustments";
+import {
+  cloneAdjustments,
+  cloneRawSettings,
+  fileFingerprint,
+  loadSession,
+  saveSession,
+  STORAGE_KEY,
+  type PhotoId,
+  type PersistedSession,
+} from "../editor/persistence";
 import type { DecodedImage } from "../editor/pipeline";
+import { createThumbnailSafe } from "../editor/thumbnail";
+import {
+  normalizeGeometry,
+  type Geometry,
+} from "../editor/geometry";
+import {
+  DEFAULT_RAW_SETTINGS,
+  type RawSettings,
+} from "../editor/rawSettings";
 
-type EditorState = {
-  image: DecodedImage | null;
-  filename: string | null;
+export type PhotoRecord = {
+  id: PhotoId;
+  filename: string;
+  fingerprint: string;
+  sourceFile: File | null;
+  isRaw: boolean;
   adjustments: Adjustments;
-  status: string | null;
-
-  setImage: (image: DecodedImage, filename: string) => void;
-  setAdjustment: <K extends keyof Adjustments>(key: K, value: Adjustments[K]) => void;
-  resetAdjustments: () => void;
-  setStatus: (msg: string | null) => void;
+  rawSettings: RawSettings;
+  image: DecodedImage | null;
+  thumbnailUrl: string | null;
 };
 
-export const useEditor = create<EditorState>((set) => ({
-  image: null,
-  filename: null,
-  adjustments: DEFAULT_ADJUSTMENTS,
-  status: null,
+type EditorState = {
+  photos: Record<PhotoId, PhotoRecord>;
+  photoOrder: PhotoId[];
+  activePhotoId: PhotoId | null;
+  status: string | null;
+  cropEditing: boolean;
 
-  setImage: (image, filename) =>
-    set({ image, filename, adjustments: DEFAULT_ADJUSTMENTS }),
-  setAdjustment: (key, value) =>
-    set((s) => ({ adjustments: { ...s.adjustments, [key]: value } })),
-  resetAdjustments: () => set({ adjustments: DEFAULT_ADJUSTMENTS }),
+  addPhoto: (
+    image: DecodedImage,
+    file: File,
+    isRaw: boolean,
+    makeActive?: boolean,
+  ) => PhotoId;
+  setActivePhoto: (id: PhotoId) => void;
+  removePhoto: (id: PhotoId) => void;
+  setDecodedImage: (image: DecodedImage) => void;
+  setAdjustment: <K extends keyof Adjustments>(
+    key: K,
+    value: Adjustments[K],
+  ) => void;
+  setGeometry: (patch: Partial<Geometry>) => void;
+  setRawSetting: <K extends keyof RawSettings>(
+    key: K,
+    value: RawSettings[K],
+  ) => void;
+  resetAdjustments: () => void;
+  resetRawSettings: () => void;
+  applyAdjustmentsToAll: () => void;
+  applyRawSettingsToAll: () => void;
+  setStatus: (msg: string | null) => void;
+  setCropEditing: (editing: boolean) => void;
+  clearCatalog: () => void;
+};
+
+function buildInitialCatalog(): Pick<
+  EditorState,
+  "photos" | "photoOrder" | "activePhotoId"
+> {
+  const session = loadSession();
+  if (!session) {
+    return { photos: {}, photoOrder: [], activePhotoId: null };
+  }
+  const photos: Record<PhotoId, PhotoRecord> = {};
+  for (const p of session.photos) {
+    photos[p.id] = {
+      id: p.id,
+      filename: p.filename,
+      fingerprint: p.fingerprint,
+      sourceFile: null,
+      isRaw: p.isRaw,
+      adjustments: cloneAdjustments(p.adjustments),
+      rawSettings: cloneRawSettings(p.rawSettings),
+      image: null,
+      thumbnailUrl: null,
+    };
+  }
+  return {
+    photos,
+    photoOrder: session.photoOrder.filter((id) => photos[id]),
+    activePhotoId:
+      session.activePhotoId && photos[session.activePhotoId]
+        ? session.activePhotoId
+        : (session.photoOrder.find((id) => photos[id]) ?? null),
+  };
+}
+
+let persistTimer: ReturnType<typeof setTimeout> | null = null;
+
+function schedulePersist(getState: () => EditorState) {
+  if (persistTimer) clearTimeout(persistTimer);
+  persistTimer = setTimeout(() => {
+    persistTimer = null;
+    const s = getState();
+    const session: PersistedSession = {
+      version: 1,
+      activePhotoId: s.activePhotoId,
+      photoOrder: s.photoOrder,
+      photos: s.photoOrder
+        .map((id) => s.photos[id])
+        .filter(Boolean)
+        .map((p) => ({
+          id: p.id,
+          filename: p.filename,
+          fingerprint: p.fingerprint,
+          isRaw: p.isRaw,
+          adjustments: cloneAdjustments(p.adjustments),
+          rawSettings: cloneRawSettings(p.rawSettings),
+        })),
+    };
+    saveSession(session);
+  }, 250);
+}
+
+function getActive(state: EditorState): PhotoRecord | null {
+  if (!state.activePhotoId) return null;
+  return state.photos[state.activePhotoId] ?? null;
+}
+
+function withImage(
+  record: PhotoRecord,
+  image: DecodedImage,
+): PhotoRecord {
+  return {
+    ...record,
+    image,
+    thumbnailUrl: createThumbnailSafe(image),
+  };
+}
+
+function updateActive(
+  state: EditorState,
+  patch: Partial<PhotoRecord>,
+): Partial<EditorState> {
+  const active = getActive(state);
+  if (!active) return {};
+  return {
+    photos: {
+      ...state.photos,
+      [active.id]: { ...active, ...patch },
+    },
+  };
+}
+
+const initialCatalog = buildInitialCatalog();
+
+export const useEditor = create<EditorState>((set, get) => ({
+  ...initialCatalog,
+  status: null,
+  cropEditing: false,
+
+  addPhoto: (image, file, isRaw, makeActive = true) => {
+    const fingerprint = fileFingerprint(file);
+    const existing = Object.values(get().photos).find(
+      (p) => p.fingerprint === fingerprint,
+    );
+
+    if (existing) {
+      set((s) => ({
+        photos: {
+          ...s.photos,
+          [existing.id]: withImage(
+            { ...existing, sourceFile: file, isRaw },
+            image,
+          ),
+        },
+        activePhotoId: makeActive ? existing.id : s.activePhotoId,
+      }));
+      schedulePersist(get);
+      return existing.id;
+    }
+
+    const id = crypto.randomUUID();
+    const record: PhotoRecord = withImage(
+      {
+        id,
+        filename: file.name,
+        fingerprint,
+        sourceFile: file,
+        isRaw,
+        adjustments: cloneAdjustments(DEFAULT_ADJUSTMENTS),
+        rawSettings: cloneRawSettings(DEFAULT_RAW_SETTINGS),
+        image: null,
+        thumbnailUrl: null,
+      },
+      image,
+    );
+
+    set((s) => ({
+      photos: { ...s.photos, [id]: record },
+      photoOrder: [...s.photoOrder, id],
+      activePhotoId: makeActive ? id : s.activePhotoId ?? id,
+    }));
+    schedulePersist(get);
+    return id;
+  },
+
+  setActivePhoto: (id) => {
+    if (!get().photos[id]) return;
+    set({ cropEditing: false });
+    set((s) => {
+      const next: Partial<EditorState> = { activePhotoId: id };
+      // Drop decoded pixels for inactive photos to save memory.
+      const photos = { ...s.photos };
+      for (const pid of Object.keys(photos)) {
+        if (pid !== id && photos[pid].image) {
+          photos[pid] = { ...photos[pid], image: null };
+        }
+      }
+      next.photos = photos;
+      return next;
+    });
+    schedulePersist(get);
+  },
+
+  removePhoto: (id) => {
+    set((s) => {
+      const { [id]: _, ...rest } = s.photos;
+      const photoOrder = s.photoOrder.filter((pid) => pid !== id);
+      let activePhotoId = s.activePhotoId;
+      if (activePhotoId === id) {
+        const idx = s.photoOrder.indexOf(id);
+        activePhotoId =
+          photoOrder[Math.min(idx, photoOrder.length - 1)] ?? null;
+      }
+      return { photos: rest, photoOrder, activePhotoId };
+    });
+    schedulePersist(get);
+  },
+
+  setDecodedImage: (image) => {
+    set((s) => {
+      const active = getActive(s);
+      if (!active) return {};
+      return updateActive(s, withImage(active, image));
+    });
+    schedulePersist(get);
+  },
+
+  setAdjustment: (key, value) => {
+    set((s) => {
+      const active = getActive(s);
+      if (!active) return {};
+      return updateActive(s, {
+        adjustments: { ...active.adjustments, [key]: value },
+      });
+    });
+    schedulePersist(get);
+  },
+
+  setGeometry: (patch) => {
+    set((s) => {
+      const active = getActive(s);
+      if (!active) return {};
+      const geometry = normalizeGeometry({
+        ...active.adjustments.geometry,
+        ...patch,
+      });
+      return updateActive(s, {
+        adjustments: { ...active.adjustments, geometry },
+      });
+    });
+    schedulePersist(get);
+  },
+
+  setRawSetting: (key, value) => {
+    set((s) => {
+      const active = getActive(s);
+      if (!active) return {};
+      return updateActive(s, {
+        rawSettings: { ...active.rawSettings, [key]: value },
+      });
+    });
+    schedulePersist(get);
+  },
+
+  resetAdjustments: () => {
+    set((s) =>
+      updateActive(s, {
+        adjustments: cloneAdjustments(DEFAULT_ADJUSTMENTS),
+      }),
+    );
+    schedulePersist(get);
+  },
+
+  resetRawSettings: () => {
+    set((s) =>
+      updateActive(s, {
+        rawSettings: cloneRawSettings(DEFAULT_RAW_SETTINGS),
+      }),
+    );
+    schedulePersist(get);
+  },
+
+  applyAdjustmentsToAll: () => {
+    const active = getActive(get());
+    if (!active) return;
+    const adj = cloneAdjustments(active.adjustments);
+    set((s) => ({
+      photos: Object.fromEntries(
+        Object.entries(s.photos).map(([id, p]) => [
+          id,
+          { ...p, adjustments: cloneAdjustments(adj) },
+        ]),
+      ),
+    }));
+    schedulePersist(get);
+  },
+
+  applyRawSettingsToAll: () => {
+    const active = getActive(get());
+    if (!active) return;
+    const raw = cloneRawSettings(active.rawSettings);
+    set((s) => ({
+      photos: Object.fromEntries(
+        Object.entries(s.photos).map(([id, p]) => [
+          id,
+          p.isRaw ? { ...p, rawSettings: cloneRawSettings(raw) } : p,
+        ]),
+      ),
+    }));
+    schedulePersist(get);
+  },
+
   setStatus: (status) => set({ status }),
+
+  setCropEditing: (cropEditing) => set({ cropEditing }),
+
+  clearCatalog: () => {
+    set({ photos: {}, photoOrder: [], activePhotoId: null, cropEditing: false });
+    localStorage.removeItem(STORAGE_KEY);
+  },
 }));
+
+// Selectors for active photo fields
+export function selectActivePhoto(s: EditorState): PhotoRecord | null {
+  return getActive(s);
+}
+
+export function selectImage(s: EditorState) {
+  return getActive(s)?.image ?? null;
+}
+
+export function selectFilename(s: EditorState) {
+  return getActive(s)?.filename ?? null;
+}
+
+export function selectSourceFile(s: EditorState) {
+  return getActive(s)?.sourceFile ?? null;
+}
+
+export function selectIsRaw(s: EditorState) {
+  return getActive(s)?.isRaw ?? false;
+}
+
+export function selectAdjustments(s: EditorState) {
+  return getActive(s)?.adjustments ?? DEFAULT_ADJUSTMENTS;
+}
+
+export function selectRawSettings(s: EditorState) {
+  return getActive(s)?.rawSettings ?? DEFAULT_RAW_SETTINGS;
+}
+
+export function selectNeedsReopen(s: EditorState): boolean {
+  return (
+    s.photoOrder.length > 0 &&
+    s.photoOrder.some((id) => !s.photos[id]?.sourceFile)
+  );
+}
