@@ -1,18 +1,30 @@
 import { Adjustments } from "./adjustments";
+import { wbMatrix } from "./colorMath";
 import { buildCurveLUT } from "./curve";
 import { FILM_SHADER_INDEX } from "./filmStocks";
 import { getOutputSize, rotationRadians } from "./geometry";
 import { FRAG_SRC, VERT_SRC } from "./shaders";
 
+/**
+ * A decoded image ready for upload.
+ *
+ * `format` controls the meaning of `pixels`:
+ *  - `"srgb8"`     — `Uint8Array | Uint8ClampedArray`, RGBA, sRGB-encoded
+ *    8-bit per channel. Path used by JPEG / PNG / WebP / AVIF.
+ *  - `"linear16"`  — `Uint16Array`, RGBA, IEEE 754 half-float bits storing
+ *    *linear-light* sRGB values. Path used by RAW develop so highlights
+ *    above 1.0 are preserved for recovery.
+ */
 export type DecodedImage = {
   width: number;
   height: number;
-  pixels: Uint8Array | Uint8ClampedArray; // RGBA
+  pixels: Uint8Array | Uint8ClampedArray | Uint16Array;
   flipY: boolean;
+  format: "srgb8" | "linear16";
 };
 
 type GLState = {
-  gl: WebGLRenderingContext;
+  gl: WebGL2RenderingContext;
   program: WebGLProgram;
   imageTex: WebGLTexture;
   curveTex: WebGLTexture;
@@ -24,12 +36,16 @@ export class Pipeline {
   private state: GLState;
 
   constructor(canvas: HTMLCanvasElement) {
-    const gl = canvas.getContext("webgl", {
+    const gl = canvas.getContext("webgl2", {
       preserveDrawingBuffer: true,
       premultipliedAlpha: false,
       antialias: false,
     });
-    if (!gl) throw new Error("WebGL not supported");
+    if (!gl) {
+      throw new Error(
+        "WebGL2 not supported — try a modern Chrome, Firefox, or Safari (16.4+).",
+      );
+    }
 
     const program = makeProgram(gl, VERT_SRC, FRAG_SRC);
     gl.useProgram(program);
@@ -71,12 +87,12 @@ export class Pipeline {
       "u_shadows",
       "u_whites",
       "u_blacks",
-      "u_temperature",
-      "u_tint",
+      "u_wbMatrix",
       "u_vibrance",
       "u_saturation",
       "u_flipY",
       "u_film",
+      "u_inputLinear",
       "u_crop",
       "u_cropSize",
       "u_angle",
@@ -95,25 +111,48 @@ export class Pipeline {
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, imageTex);
     gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
-    const pixels =
-      image.pixels instanceof Uint8Array
-        ? image.pixels
-        : new Uint8Array(
-            image.pixels.buffer,
-            image.pixels.byteOffset,
-            image.pixels.byteLength,
-          );
-    gl.texImage2D(
-      gl.TEXTURE_2D,
-      0,
-      gl.RGBA,
-      image.width,
-      image.height,
-      0,
-      gl.RGBA,
-      gl.UNSIGNED_BYTE,
-      pixels,
-    );
+
+    if (image.format === "linear16") {
+      const halves =
+        image.pixels instanceof Uint16Array
+          ? image.pixels
+          : new Uint16Array(
+              image.pixels.buffer,
+              image.pixels.byteOffset,
+              image.pixels.byteLength / 2,
+            );
+      gl.texImage2D(
+        gl.TEXTURE_2D,
+        0,
+        gl.RGBA16F,
+        image.width,
+        image.height,
+        0,
+        gl.RGBA,
+        gl.HALF_FLOAT,
+        halves,
+      );
+    } else {
+      const pixels =
+        image.pixels instanceof Uint8Array
+          ? image.pixels
+          : new Uint8Array(
+              image.pixels.buffer,
+              image.pixels.byteOffset,
+              image.pixels.byteLength,
+            );
+      gl.texImage2D(
+        gl.TEXTURE_2D,
+        0,
+        gl.RGBA8,
+        image.width,
+        image.height,
+        0,
+        gl.RGBA,
+        gl.UNSIGNED_BYTE,
+        pixels,
+      );
+    }
     this.state.image = image;
   }
 
@@ -201,12 +240,19 @@ export class Pipeline {
     gl.uniform1f(uniforms.u_shadows!, adj.shadows);
     gl.uniform1f(uniforms.u_whites!, adj.whites);
     gl.uniform1f(uniforms.u_blacks!, adj.blacks);
-    gl.uniform1f(uniforms.u_temperature!, adj.temperature);
-    gl.uniform1f(uniforms.u_tint!, adj.tint);
+    gl.uniformMatrix3fv(
+      uniforms.u_wbMatrix!,
+      false,
+      wbMatrix(adj.temperature, adj.tint),
+    );
     gl.uniform1f(uniforms.u_vibrance!, adj.vibrance);
     gl.uniform1f(uniforms.u_saturation!, adj.saturation);
     gl.uniform1f(uniforms.u_flipY!, image.flipY ? 1.0 : 0.0);
     gl.uniform1f(uniforms.u_film!, FILM_SHADER_INDEX[adj.film]);
+    gl.uniform1f(
+      uniforms.u_inputLinear!,
+      image.format === "linear16" ? 1.0 : 0.0,
+    );
 
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   }

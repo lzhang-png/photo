@@ -53,7 +53,13 @@ export function toLibrawOptions(
   return {
     useCameraWb: true,
     useCameraMatrix: 1,
-    outputBps: 8,
+    /**
+     * Request 16 bits per channel from libraw so we have ~12-14 bits of
+     * effective dynamic range to feed into the WebGL2 half-float pipeline.
+     * Without this we'd ship-truncate to 8-bit *before* any develop step,
+     * permanently clipping highlights that we could otherwise recover.
+     */
+    outputBps: 16,
     outputColor: 1,
     noAutoBright: !settings.autoBright,
     // LibRaw auto-bright stretches to near-white; dial back the final gain.

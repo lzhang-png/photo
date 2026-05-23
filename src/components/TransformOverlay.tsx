@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import type { Geometry } from "../editor/geometry";
 import { normalizeGeometry } from "../editor/geometry";
 import type { DecodedImage } from "../editor/pipeline";
@@ -62,8 +62,11 @@ export function TransformOverlay({
 }: Props) {
   const [layout, setLayout] = useState<{
     container: DOMRect;
+    viewW: number;
+    viewH: number;
     image: ImageRect;
   } | null>(null);
+  const maskId = useId();
   const dragRef = useRef<{
     mode: DragMode;
     startGeom: Geometry;
@@ -75,13 +78,10 @@ export function TransformOverlay({
     const el = containerRef.current;
     if (!el) return;
     const container = el.getBoundingClientRect();
-    const ir = imageRect(
-      container.width,
-      container.height,
-      image.width,
-      image.height,
-    );
-    setLayout({ container, image: ir });
+    const viewW = el.clientWidth;
+    const viewH = el.clientHeight;
+    const ir = imageRect(viewW, viewH, image.width, image.height);
+    setLayout({ container, viewW, viewH, image: ir });
   }, [containerRef, image.width, image.height]);
 
   useEffect(() => {
@@ -176,16 +176,19 @@ export function TransformOverlay({
     };
   };
 
-  const handleSize = 14;
+  const handleSize = 12;
+
+  const handleClass =
+    "pointer-events-auto fill-white stroke-[oklch(0.68_0.14_250)] stroke-2 hover:fill-primary/20";
 
   return (
     <svg
-      className="transform-overlay"
-      width={layout.container.width}
-      height={layout.container.height}
+      className="pointer-events-none absolute inset-0 size-full"
+      viewBox={`0 0 ${layout.viewW} ${layout.viewH}`}
+      preserveAspectRatio="none"
     >
       <defs>
-        <mask id="crop-mask">
+        <mask id={maskId}>
           <rect width="100%" height="100%" fill="white" />
           <rect
             x={left}
@@ -200,7 +203,7 @@ export function TransformOverlay({
         width="100%"
         height="100%"
         fill="rgba(0,0,0,0.45)"
-        mask="url(#crop-mask)"
+        mask={`url(#${maskId})`}
         pointerEvents="none"
       />
       <rect
@@ -211,28 +214,29 @@ export function TransformOverlay({
         fill="none"
         stroke="oklch(0.68 0.14 250)"
         strokeWidth={2}
-        pointerEvents="all"
+        className="pointer-events-auto cursor-move"
         onPointerDown={(e) => startDrag("move", e)}
       />
       {(
         [
-          ["nw", left, top],
-          ["ne", left + width, top],
-          ["sw", left, top + height],
-          ["se", left + width, top + height],
-          ["n", left + width / 2, top],
-          ["s", left + width / 2, top + height],
-          ["w", left, top + height / 2],
-          ["e", left + width, top + height / 2],
+          ["nw", left, top, "cursor-nwse-resize"],
+          ["ne", left + width, top, "cursor-nesw-resize"],
+          ["sw", left, top + height, "cursor-nesw-resize"],
+          ["se", left + width, top + height, "cursor-nwse-resize"],
+          ["n", left + width / 2, top, "cursor-ns-resize"],
+          ["s", left + width / 2, top + height, "cursor-ns-resize"],
+          ["w", left, top + height / 2, "cursor-ew-resize"],
+          ["e", left + width, top + height / 2, "cursor-ew-resize"],
         ] as const
-      ).map(([mode, cx, cy]) => (
+      ).map(([mode, cx, cy, cursor]) => (
         <rect
           key={mode}
           x={cx - handleSize / 2}
           y={cy - handleSize / 2}
           width={handleSize}
           height={handleSize}
-          className="crop-handle"
+          rx={2}
+          className={`${handleClass} ${cursor}`}
           onPointerDown={(e) => startDrag(mode, e)}
         />
       ))}

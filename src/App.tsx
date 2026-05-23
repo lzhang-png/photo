@@ -1,3 +1,4 @@
+import { useCallback, useState } from "react";
 import {
   useEditor,
   selectAdjustments,
@@ -8,7 +9,14 @@ import {
 import { StatusPill } from "./components/StatusPill";
 import { Viewport } from "./components/Viewport";
 import { Sidebar } from "./components/Sidebar";
-import { downloadBlob, exportImage } from "./editor/export";
+import { SidebarResizeHandle } from "./components/SidebarResizeHandle";
+import {
+  loadUiPrefs,
+  MAX_SIDEBAR_WIDTH,
+  MIN_SIDEBAR_WIDTH,
+  saveUiPrefs,
+} from "./editor/uiPrefs";
+import { downloadBlob, downloadZip, exportImage, uniqueFilename } from "./editor/export";
 import { decode } from "./editor/decode";
 import { createBatchProgressReporter } from "./editor/decodeProgress";
 import { Badge } from "@/components/ui/badge";
@@ -22,11 +30,18 @@ export function App() {
   const decodeProgress = useEditor((s) => s.decodeProgress);
   const adjustments = useEditor(selectAdjustments);
   const photoOrder = useEditor((s) => s.photoOrder);
-  const photos = useEditor((s) => s.photos);
   const needsReopen = useEditor(selectNeedsReopen);
   const resetAdjustments = useEditor((s) => s.resetAdjustments);
   const setStatus = useEditor((s) => s.setStatus);
   const setDecodeProgress = useEditor((s) => s.setDecodeProgress);
+
+  const [sidebarWidth, setSidebarWidth] = useState(
+    () => loadUiPrefs().sidebarWidth,
+  );
+
+  const commitSidebarWidth = useCallback((width: number) => {
+    saveUiPrefs({ sidebarWidth: width });
+  }, []);
 
   const hasCatalog = photoOrder.length > 0;
 
@@ -36,7 +51,7 @@ export function App() {
     try {
       const blob = await exportImage(image, adjustments, "image/jpeg", 0.92);
       const base = filename.replace(/\.[^.]+$/, "");
-      downloadBlob(blob, `${base}-edited.jpg`);
+      await downloadBlob(blob, `${base}-edited.jpg`);
       setStatus(`Exported ${base}-edited.jpg`);
     } catch (err) {
       setStatus(`Export failed: ${(err as Error).message}`);
@@ -44,17 +59,34 @@ export function App() {
   };
 
   const onExportAll = async () => {
-    if (photoOrder.length === 0) return;
-    setStatus("Exporting all photos…");
-    let done = 0;
-    const exportList = photoOrder.filter((id) => photos[id]?.sourceFile);
+    const { photoOrder: order, photos: catalog } = useEditor.getState();
+    if (order.length === 0) return;
+
+    const exportList = order.filter(
+      (id) => catalog[id]?.sourceFile || catalog[id]?.image,
+    );
+    if (exportList.length === 0) {
+      setStatus("No photos ready to export — re-open files first");
+      return;
+    }
+
+    setStatus(`Exporting ${exportList.length} photo(s)…`);
+    let skipped = 0;
+    const zipEntries: Record<string, Uint8Array> = {};
+    const usedNames = new Set<string>();
+
     for (let i = 0; i < exportList.length; i++) {
-      const id = exportList[i];
-      const photo = photos[id];
-      if (!photo?.sourceFile) continue;
+      const id = exportList[i]!;
+      const photo = useEditor.getState().photos[id];
+      if (!photo) continue;
+
       try {
         let pixels = photo.image;
         if (!pixels) {
+          if (!photo.sourceFile) {
+            skipped++;
+            continue;
+          }
           setStatus(`Decoding ${photo.filename} (${i + 1}/${exportList.length})…`);
           pixels = await decode(
             photo.sourceFile,
@@ -68,6 +100,8 @@ export function App() {
           );
           setDecodeProgress(null);
         }
+
+        setStatus(`Rendering ${photo.filename} (${i + 1}/${exportList.length})…`);
         const blob = await exportImage(
           pixels,
           photo.adjustments,
@@ -75,20 +109,49 @@ export function App() {
           0.92,
         );
         const base = photo.filename.replace(/\.[^.]+$/, "");
-        downloadBlob(blob, `${base}-edited.jpg`);
-        done++;
+        const filename = uniqueFilename(`${base}-edited.jpg`, usedNames);
+        zipEntries[filename] = new Uint8Array(await blob.arrayBuffer());
       } catch (err) {
         setDecodeProgress(null);
         setStatus(`Export failed ${photo.filename}: ${(err as Error).message}`);
         return;
       }
     }
+
     setDecodeProgress(null);
-    setStatus(`Exported ${done} photo(s)`);
+    const exported = Object.keys(zipEntries).length;
+    if (exported === 0) {
+      setStatus("No photos ready to export — re-open files first");
+      return;
+    }
+
+    try {
+      if (exported === 1) {
+        const [filename] = Object.keys(zipEntries);
+        const data = zipEntries[filename]!;
+        await downloadBlob(new Blob([data.buffer as ArrayBuffer], { type: "image/jpeg" }), filename);
+      } else {
+        await downloadZip(zipEntries, "photos-edited.zip");
+      }
+    } catch (err) {
+      setStatus(`Download failed: ${(err as Error).message}`);
+      return;
+    }
+
+    if (skipped > 0) {
+      setStatus(`Exported ${exported} photo(s), skipped ${skipped} without data`);
+    } else if (exported === 1) {
+      setStatus(`Exported ${Object.keys(zipEntries)[0]}`);
+    } else {
+      setStatus(`Exported ${exported} photo(s) to photos-edited.zip`);
+    }
   };
 
   return (
-    <div className="relative grid h-full w-full grid-cols-[1fr_360px] grid-rows-[auto_1fr]">
+    <div
+      className="relative grid h-full w-full grid-rows-[auto_1fr]"
+      style={{ gridTemplateColumns: `1fr ${sidebarWidth}px` }}
+    >
       <header className="col-span-full flex h-12 shrink-0 items-center gap-2.5 border-b border-border bg-sidebar px-4">
         <span className="text-base font-semibold tracking-wide">Photo</span>
         <Button
@@ -134,7 +197,16 @@ export function App() {
         </Button>
       </header>
       <Viewport />
-      <Sidebar />
+      <div className="relative flex h-full min-h-0 flex-col">
+        <SidebarResizeHandle
+          width={sidebarWidth}
+          min={MIN_SIDEBAR_WIDTH}
+          max={MAX_SIDEBAR_WIDTH}
+          onWidthChange={setSidebarWidth}
+          onWidthCommit={commitSidebarWidth}
+        />
+        <Sidebar />
+      </div>
     </div>
   );
 }

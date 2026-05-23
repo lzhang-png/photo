@@ -21,6 +21,7 @@ import {
   DEFAULT_RAW_SETTINGS,
   type RawSettings,
 } from "../editor/rawSettings";
+import { loadUiPrefs, saveUiPrefs } from "../editor/uiPrefs";
 
 export type PhotoRecord = {
   id: PhotoId;
@@ -41,6 +42,7 @@ type EditorState = {
   status: string | null;
   decodeProgress: DecodeProgress | null;
   cropEditing: boolean;
+  showHistogram: boolean;
 
   addPhoto: (
     image: DecodedImage,
@@ -67,6 +69,8 @@ type EditorState = {
   setStatus: (msg: string | null) => void;
   setDecodeProgress: (progress: DecodeProgress | null) => void;
   setCropEditing: (editing: boolean) => void;
+  toggleHistogram: () => void;
+  setShowHistogram: (visible: boolean) => void;
   clearCatalog: () => void;
 };
 
@@ -160,12 +164,14 @@ function updateActive(
 }
 
 const initialCatalog = buildInitialCatalog();
+const initialPrefs = loadUiPrefs();
 
 export const useEditor = create<EditorState>((set, get) => ({
   ...initialCatalog,
   status: null,
   decodeProgress: null,
   cropEditing: false,
+  showHistogram: initialPrefs.showHistogram,
 
   addPhoto: (image, file, isRaw, makeActive = true) => {
     const fingerprint = fileFingerprint(file);
@@ -333,6 +339,17 @@ export const useEditor = create<EditorState>((set, get) => ({
   setDecodeProgress: (decodeProgress) => set({ decodeProgress }),
 
   setCropEditing: (cropEditing) => set({ cropEditing }),
+
+  toggleHistogram: () => {
+    const next = !get().showHistogram;
+    set({ showHistogram: next });
+    saveUiPrefs({ showHistogram: next });
+  },
+
+  setShowHistogram: (visible) => {
+    set({ showHistogram: visible });
+    saveUiPrefs({ showHistogram: visible });
+  },
 
   clearCatalog: () => {
     set({ photos: {}, photoOrder: [], activePhotoId: null, cropEditing: false });

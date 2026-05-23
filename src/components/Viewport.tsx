@@ -1,6 +1,7 @@
-import { Eye, Minus, Plus, RotateCcw } from "lucide-react";
+import { BarChart3, Eye, Minus, Plus, RotateCcw } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { originalPreviewAdjustments } from "../editor/adjustments";
+import { fitImageInBox, type ImageFrame } from "../editor/viewLayout";
 import { Button } from "@/components/ui/button";
 import { decode, isRawFile } from "../editor/decode";
 import { createBatchProgressReporter } from "../editor/decodeProgress";
@@ -15,6 +16,7 @@ import {
 } from "../state/store";
 import { cn } from "@/lib/utils";
 import { Filmstrip } from "./Filmstrip";
+import { Histogram } from "./Histogram";
 import { TransformOverlay } from "./TransformOverlay";
 
 const RAW_REDECODE_MS = 400;
@@ -48,6 +50,7 @@ function clampPan(
 export function Viewport() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
+  const cropOverlayRef = useRef<HTMLDivElement>(null);
   const pipelineRef = useRef<Pipeline | null>(null);
   const skipRawRedecodeRef = useRef(true);
   const compareOriginalRef = useRef(false);
@@ -66,7 +69,11 @@ export function Viewport() {
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState<Pan>({ x: 0, y: 0 });
   const [isPanning, setIsPanning] = useState(false);
+  const [imageFrame, setImageFrame] = useState<ImageFrame | null>(null);
+  const [histogramTick, setHistogramTick] = useState(0);
   const cropPreview = useEditor((s) => s.cropEditing);
+  const showHistogram = useEditor((s) => s.showHistogram);
+  const toggleHistogram = useEditor((s) => s.toggleHistogram);
 
   const image = useEditor(selectImage);
   const adjustments = useEditor(selectAdjustments);
@@ -149,6 +156,17 @@ export function Viewport() {
     setPan({ x: 0, y: 0 });
   }, []);
 
+  const measureImageFrame = useCallback(() => {
+    const el = viewportRef.current;
+    if (!el || !image) {
+      setImageFrame(null);
+      return;
+    }
+    setImageFrame(
+      fitImageInBox(el.clientWidth, el.clientHeight, image.width, image.height),
+    );
+  }, [image]);
+
   const onComparePointerDown = (e: React.PointerEvent<HTMLButtonElement>) => {
     if (!image || cropPreview) return;
     e.preventDefault();
@@ -229,12 +247,41 @@ export function Viewport() {
 
   useEffect(() => {
     renderFrame();
+    setHistogramTick((t) => t + 1);
   }, [adjustments, cropPreview, renderFrame]);
+
+  useEffect(() => {
+    if (image) setHistogramTick((t) => t + 1);
+  }, [image]);
+
+  useEffect(() => {
+    if (!cropPreview || !imageFrame) return;
+    renderFrame(true);
+  }, [cropPreview, imageFrame, renderFrame]);
+
+  useEffect(() => {
+    measureImageFrame();
+    const el = viewportRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(measureImageFrame);
+    ro.observe(el);
+    window.addEventListener("resize", measureImageFrame);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener("resize", measureImageFrame);
+    };
+  }, [measureImageFrame]);
 
   useEffect(() => {
     if (!cropPreview) return;
     endCompare();
-  }, [cropPreview, endCompare]);
+    resetView();
+    measureImageFrame();
+  }, [cropPreview, endCompare, resetView, measureImageFrame]);
+
+  useEffect(() => {
+    if (cropPreview) measureImageFrame();
+  }, [cropPreview, image?.width, image?.height, measureImageFrame]);
 
   useEffect(() => () => endCompare(), [endCompare]);
 
@@ -403,16 +450,28 @@ export function Viewport() {
         <canvas
           ref={canvasRef}
           className={cn(
-            "absolute inset-0 size-full origin-center object-contain object-center",
-            !isPanning && "transition-transform duration-150 ease-out",
+            "absolute origin-center",
+            cropPreview && imageFrame
+              ? "size-full"
+              : "inset-0 size-full object-contain object-center",
+            !cropPreview && !isPanning && "transition-transform duration-150 ease-out",
             image &&
               !cropPreview &&
               zoom > 1 &&
               (isPanning ? "cursor-grabbing" : "cursor-grab"),
           )}
-          style={{
-            transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
-          }}
+          style={
+            cropPreview && imageFrame
+              ? {
+                  left: imageFrame.ox,
+                  top: imageFrame.oy,
+                  width: imageFrame.dw,
+                  height: imageFrame.dh,
+                }
+              : {
+                  transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
+                }
+          }
           onPointerDown={onCanvasPointerDown}
           onPointerMove={onCanvasPointerMove}
           onPointerUp={endPan}
@@ -430,6 +489,17 @@ export function Viewport() {
               "group-hover/viewport:pointer-events-auto group-hover/viewport:opacity-100",
             )}
           >
+            <Button
+              type="button"
+              variant={showHistogram ? "secondary" : "ghost"}
+              size="icon-sm"
+              className="text-muted-foreground"
+              title={showHistogram ? "Hide histogram" : "Show histogram"}
+              onClick={toggleHistogram}
+            >
+              <BarChart3 className="size-4" />
+            </Button>
+            <div className="mx-0.5 w-px self-stretch bg-border" />
             <Button
               type="button"
               variant={compareOriginal ? "secondary" : "ghost"}
@@ -499,18 +569,36 @@ export function Viewport() {
             </Button>
           </div>
         )}
+        {showHistogram && image && (
+          <Histogram
+            source={canvasRef.current}
+            deps={[histogramTick]}
+            className="pointer-events-none absolute top-3 right-3 z-20"
+          />
+        )}
         {compareOriginal && (
           <div className="pointer-events-none absolute top-3 left-1/2 z-10 -translate-x-1/2 rounded-md bg-black/70 px-2.5 py-1 text-xs font-medium text-white">
             Original
           </div>
         )}
-        {cropPreview && image && (
-          <TransformOverlay
-            image={image}
-            geometry={adjustments.geometry}
-            onChange={setGeometry}
-            containerRef={viewportRef}
-          />
+        {cropPreview && image && imageFrame && (
+          <div
+            ref={cropOverlayRef}
+            className="absolute z-10"
+            style={{
+              left: imageFrame.ox,
+              top: imageFrame.oy,
+              width: imageFrame.dw,
+              height: imageFrame.dh,
+            }}
+          >
+            <TransformOverlay
+              image={image}
+              geometry={adjustments.geometry}
+              onChange={setGeometry}
+              containerRef={cropOverlayRef}
+            />
+          </div>
         )}
         {!image && photoOrder.length === 0 && (
           <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-3 p-6 text-center text-base text-muted-foreground">

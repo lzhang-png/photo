@@ -1,5 +1,6 @@
 import { RotateCcw, RotateCw } from "lucide-react";
 import { AdjustmentSlider } from "@/components/AdjustmentSlider";
+import { InfoTooltip } from "@/components/InfoTooltip";
 import { SidebarSection } from "@/components/SidebarSection";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -70,11 +71,14 @@ export function Sidebar() {
   const disabled = !image;
 
   return (
-    <aside className="flex min-h-0 flex-col border-l border-border bg-sidebar">
+    <aside className="flex h-full min-h-0 flex-col overflow-hidden border-l border-border bg-sidebar">
       <ScrollArea className="min-h-0 flex-1">
         <div className="pb-4">
           {photoCount > 1 && (
-            <SidebarSection title="Bulk Edit">
+            <SidebarSection
+              title="Bulk Edit"
+              hint="Copies the current photo's settings to every photo in the catalog. Edits are saved automatically."
+            >
               <div className="space-y-2.5">
                 <Button
                   type="button"
@@ -95,15 +99,14 @@ export function Sidebar() {
                   </Button>
                 )}
               </div>
-              <p className="mt-2.5 text-[11px] leading-relaxed text-muted-foreground">
-                Copies the current photo&apos;s settings to every photo in the
-                catalog. Edits are saved automatically.
-              </p>
             </SidebarSection>
           )}
 
           {isRaw && (
-            <SidebarSection title="RAW Develop">
+            <SidebarSection
+              title="RAW Develop"
+              hint="Changes reprocess the file (may take a few seconds)."
+            >
               <div className="space-y-5">
                 <div className="space-y-2">
                   <Label htmlFor="raw-denoise">Denoise</Label>
@@ -137,11 +140,8 @@ export function Sidebar() {
                   <Label htmlFor="raw-autobright" className="font-normal">
                     Auto brightness
                   </Label>
+                  <InfoTooltip text="Off = darker, flatter linear decode. All RAW files get a soft, slightly muted develop pass after decode." />
                 </div>
-                <p className="text-[11px] leading-relaxed text-muted-foreground">
-                  Off = darker, flatter linear decode. All RAW files get a soft,
-                  slightly muted develop pass after decode.
-                </p>
 
                 <div className="space-y-2">
                   <div className="flex items-center justify-between gap-2">
@@ -192,14 +192,14 @@ export function Sidebar() {
                     Reset RAW settings
                   </Button>
                 )}
-                <p className="text-[11px] leading-relaxed text-muted-foreground">
-                  Changes reprocess the file (may take a few seconds).
-                </p>
               </div>
             </SidebarSection>
           )}
 
-          <SidebarSection title="Transform">
+          <SidebarSection
+            title="Transform"
+            hint="Crop: drag handles in crop mode · Level straightens horizons"
+          >
             <div className="flex gap-2">
               <Button
                 type="button"
@@ -314,9 +314,6 @@ export function Sidebar() {
                 Reset transform
               </Button>
             )}
-            <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
-              Crop: drag handles in crop mode · Level straightens horizons
-            </p>
           </SidebarSection>
 
           <SidebarSection title="Light">
@@ -347,7 +344,14 @@ export function Sidebar() {
             </div>
           </SidebarSection>
 
-          <SidebarSection title="Film">
+          <SidebarSection
+            title="Film"
+            hint={
+              adj.film !== "none"
+                ? FILM_STOCKS.find((s) => s.id === adj.film)?.hint
+                : undefined
+            }
+          >
             <div className="grid grid-cols-2 gap-2">
               {FILM_STOCKS.map((stock) => (
                 <Toggle
@@ -366,25 +370,19 @@ export function Sidebar() {
                 </Toggle>
               ))}
             </div>
-            {adj.film !== "none" && (
-              <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
-                {FILM_STOCKS.find((s) => s.id === adj.film)?.hint}
-              </p>
-            )}
           </SidebarSection>
 
           <section className="px-4 py-4">
-            <h3 className="mb-3 text-base font-medium uppercase tracking-wider text-muted-foreground">
-              Tone Curve
-            </h3>
+            <div className="mb-3 flex items-center gap-1.5">
+              <h3 className="text-base font-medium uppercase tracking-wider text-muted-foreground">
+                Tone Curve
+              </h3>
+              <InfoTooltip text="Drag points · click to add · double-click point to remove · double-click background to reset" />
+            </div>
             <CurveEditor
               points={adj.curve}
               onChange={(c) => setAdjustment("curve", c)}
             />
-            <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
-              Drag points · click to add · double-click point to remove ·
-              double-click background to reset
-            </p>
           </section>
         </div>
       </ScrollArea>

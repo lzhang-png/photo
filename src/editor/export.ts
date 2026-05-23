@@ -1,3 +1,4 @@
+import { zipSync } from "fflate";
 import { Adjustments } from "./adjustments";
 import { getOutputSize } from "./geometry";
 import { Pipeline, DecodedImage } from "./pipeline";
@@ -32,13 +33,40 @@ export async function exportImage(
   });
 }
 
-export function downloadBlob(blob: Blob, filename: string) {
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
+export function downloadBlob(blob: Blob, filename: string): Promise<void> {
+  return new Promise((resolve) => {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    // Keep the blob URL alive briefly so the browser can start each download.
+    window.setTimeout(() => {
+      URL.revokeObjectURL(url);
+      resolve();
+    }, 400);
+  });
 }
+
+export async function downloadZip(
+  entries: Record<string, Uint8Array>,
+  filename: string,
+): Promise<void> {
+  const zipped = zipSync(entries);
+  await downloadBlob(new Blob([zipped.buffer as ArrayBuffer], { type: "application/zip" }), filename);
+}
+
+function uniqueFilename(base: string, used: Set<string>): string {
+  let name = base;
+  let n = 2;
+  while (used.has(name)) {
+    name = base.replace(/(\.[^.]+)$/, `-${n}$1`);
+    n++;
+  }
+  used.add(name);
+  return name;
+}
+
+export { uniqueFilename };
