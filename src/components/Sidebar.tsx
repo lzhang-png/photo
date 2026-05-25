@@ -1,7 +1,8 @@
-import { ClipboardCopy, ClipboardPaste, Lock, LockOpen, RotateCcw, RotateCw } from "lucide-react";
+import { ClipboardCopy, ClipboardPaste, RotateCcw } from "lucide-react";
 import { AdjustmentSlider } from "@/components/AdjustmentSlider";
 import { InfoTooltip } from "@/components/InfoTooltip";
 import { SidebarSection } from "@/components/SidebarSection";
+import { TransformPanel } from "@/components/TransformPanel";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
@@ -22,14 +23,6 @@ import {
   TONE_SLIDERS,
 } from "../editor/adjustments";
 import {
-  cropPixelAspect,
-  cropToAspect,
-  DEFAULT_GEOMETRY,
-  isDefaultGeometry,
-  rotate90CCW,
-  rotate90CW,
-} from "../editor/geometry";
-import {
   DEFAULT_RAW_SETTINGS,
   DENOISE_OPTIONS,
   denoiseToSelectValue,
@@ -48,30 +41,17 @@ import {
 import { CurveEditor } from "./CurveEditor";
 import { cn } from "@/lib/utils";
 
-const ASPECT_PRESETS: { label: string; aspect: number }[] = [
-  { label: "Original", aspect: -1 },
-  { label: "1:1", aspect: 1 },
-  { label: "4:3", aspect: 4 / 3 },
-  { label: "3:2", aspect: 3 / 2 },
-  { label: "16:9", aspect: 16 / 9 },
-];
-
 export function Sidebar() {
   const adj = useEditor(selectAdjustments);
-  const image = useEditor(selectImage);
   const isRaw = useEditor(selectIsRaw);
   const raw = useEditor(selectRawSettings);
-  const cropEditing = useEditor((s) => s.cropEditing);
   const setAdjustment = useEditor((s) => s.setAdjustment);
-  const setGeometry = useEditor((s) => s.setGeometry);
-  const setCropEditing = useEditor((s) => s.setCropEditing);
   const setRawSetting = useEditor((s) => s.setRawSetting);
   const resetRawSettings = useEditor((s) => s.resetRawSettings);
   const copyEditSettings = useEditor((s) => s.copyEditSettings);
   const pasteEditSettings = useEditor((s) => s.pasteEditSettings);
   const editSettingsClipboard = useEditor((s) => s.editSettingsClipboard);
-  const geom = adj.geometry;
-  const disabled = !image;
+  const disabled = !useEditor(selectImage);
   const filmPreviews = useFilmPreviewUrls();
 
   return (
@@ -200,149 +180,7 @@ export function Sidebar() {
             </SidebarSection>
           )}
 
-          <SidebarSection
-            title="Transform"
-            hint="Crop: drag to reposition, drag handles to resize · Level straightens horizons and auto-crops black corners"
-          >
-            <div className="flex gap-2">
-              <Button
-                type="button"
-                variant="outline"
-                className="h-9 flex-1"
-                title="Rotate 90° left"
-                disabled={disabled}
-                onClick={() => setGeometry(rotate90CCW(geom))}
-              >
-                <RotateCcw className="size-4" />
-                90°
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                className="h-9 flex-1"
-                title="Rotate 90° right"
-                disabled={disabled}
-                onClick={() => setGeometry(rotate90CW(geom))}
-              >
-                90°
-                <RotateCw className="size-4" />
-              </Button>
-              <Button
-                type="button"
-                variant={cropEditing ? "default" : "outline"}
-                className="h-9 flex-1"
-                disabled={disabled}
-                onClick={() => setCropEditing(!cropEditing)}
-              >
-                {cropEditing ? "Done" : "Crop"}
-              </Button>
-            </div>
-
-            <div className="mt-4 space-y-2">
-              <div className="flex items-center justify-between gap-2">
-                <Label className="font-normal">Level</Label>
-                <div className="flex items-center gap-1.5">
-                  <span className="tabular-nums text-muted-foreground">
-                    {geom.straighten >= 0 ? "+" : ""}
-                    {geom.straighten.toFixed(1)}°
-                  </span>
-                  {geom.straighten !== 0 && (
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon-sm"
-                      className="text-muted-foreground"
-                      title="Reset"
-                      disabled={disabled}
-                      onClick={() => setGeometry({ straighten: 0 })}
-                    >
-                      <RotateCcw className="size-4" />
-                    </Button>
-                  )}
-                </div>
-              </div>
-              <Slider
-                min={-15}
-                max={15}
-                step={0.1}
-                value={[geom.straighten]}
-                disabled={disabled}
-                onValueChange={(v) => {
-                  const n = Array.isArray(v) ? v[0] : v;
-                  if (n !== undefined) setGeometry({ straighten: n });
-                }}
-              />
-            </div>
-
-            <p className="mt-4 mb-2 text-[11px] text-muted-foreground">
-              Aspect ratio
-            </p>
-            <div className="grid grid-cols-3 gap-2">
-              <Button
-                type="button"
-                variant={geom.aspectLocked ? "default" : "outline"}
-                className="h-9"
-                disabled={disabled}
-                title={geom.aspectLocked ? "Unlock aspect ratio" : "Lock aspect ratio"}
-                onClick={() => {
-                  if (!image) return;
-                  if (geom.aspectLocked) {
-                    setGeometry({ aspectLocked: false });
-                    return;
-                  }
-                  setGeometry({
-                    aspectLocked: true,
-                    lockedAspect: cropPixelAspect(geom, image.width, image.height),
-                  });
-                }}
-              >
-                {geom.aspectLocked ? (
-                  <Lock className="size-4" />
-                ) : (
-                  <LockOpen className="size-4" />
-                )}
-              </Button>
-              {ASPECT_PRESETS.map((p) => (
-                <Button
-                  key={p.label}
-                  type="button"
-                  variant="outline"
-                  className="h-9"
-                  disabled={disabled}
-                  onClick={() => {
-                    if (!image) return;
-                    if (p.aspect === -1) {
-                      setGeometry({
-                        cropX: 0,
-                        cropY: 0,
-                        cropW: 1,
-                        cropH: 1,
-                        aspectLocked: false,
-                      });
-                      return;
-                    }
-                    setGeometry(
-                      cropToAspect(image.width, image.height, p.aspect, geom),
-                    );
-                  }}
-                >
-                  {p.label}
-                </Button>
-              ))}
-            </div>
-
-            {!isDefaultGeometry(geom) && (
-              <Button
-                type="button"
-                variant="outline"
-                className="mt-3 h-9 w-full"
-                disabled={disabled}
-                onClick={() => setGeometry(DEFAULT_GEOMETRY)}
-              >
-                Reset transform
-              </Button>
-            )}
-          </SidebarSection>
+          <TransformPanel />
 
           <SidebarSection title="Light">
             <div className="space-y-5">
