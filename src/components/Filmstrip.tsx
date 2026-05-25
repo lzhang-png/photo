@@ -1,3 +1,4 @@
+import { AlertDialog } from "@base-ui/react/alert-dialog";
 import { X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Badge } from "@/components/ui/badge";
@@ -21,8 +22,11 @@ export function Filmstrip() {
   const activePhotoId = useEditor((s) => s.activePhotoId);
   const setActivePhoto = useEditor((s) => s.setActivePhoto);
   const removePhoto = useEditor((s) => s.removePhoto);
+  const clearCatalog = useEditor((s) => s.clearCatalog);
+  const setStatus = useEditor((s) => s.setStatus);
 
   const [hover, setHover] = useState<HoverState | null>(null);
+  const [clearOpen, setClearOpen] = useState(false);
   const hideTimerRef = useRef<number | null>(null);
   const hoveredThumbRef = useRef<HTMLElement | null>(null);
 
@@ -74,12 +78,21 @@ export function Filmstrip() {
     syncHoverPosition(id);
   };
 
+  const onConfirmClearAll = () => {
+    cancelHide();
+    setHover(null);
+    clearCatalog();
+    setStatus("Catalog cleared");
+    setClearOpen(false);
+  };
+
   if (photoOrder.length === 0) return null;
 
   return (
     <>
-      <ScrollArea className="h-full w-[76px] shrink-0 border-r border-border bg-sidebar">
-        <div className="flex flex-col items-center gap-1.5 p-1.5 pt-3">
+      <div className="flex h-full w-[76px] shrink-0 flex-col border-r border-border bg-sidebar">
+        <ScrollArea className="min-h-0 flex-1">
+          <div className="flex flex-col items-center gap-1.5 p-1.5 pt-3 pb-1.5">
           {photoOrder.map((id) => {
             const photo = photos[id];
             if (!photo) return null;
@@ -125,15 +138,27 @@ export function Filmstrip() {
               </div>
             );
           })}
+          </div>
+          <ScrollBar orientation="vertical" />
+        </ScrollArea>
+        <div className="shrink-0 border-t border-border p-1.5">
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="h-8 w-full px-1 text-[11px] text-muted-foreground hover:text-destructive active:!translate-y-0"
+            onClick={() => setClearOpen(true)}
+          >
+            Clear all
+          </Button>
         </div>
-        <ScrollBar orientation="vertical" />
-      </ScrollArea>
+      </div>
       {hover && (
         <Button
           type="button"
           variant="secondary"
           size="icon-sm"
-          className="fixed z-50 size-5 -translate-y-1/2 shadow-md active:-translate-y-1/2"
+          className="fixed z-50 size-5 -translate-y-1/2 shadow-md active:!-translate-y-1/2"
           style={{ top: hover.top, left: hover.left }}
           title="Remove from catalog"
           onMouseEnter={cancelHide}
@@ -149,6 +174,40 @@ export function Filmstrip() {
           <X className="size-3" />
         </Button>
       )}
+      <AlertDialog.Root open={clearOpen} onOpenChange={setClearOpen}>
+        <AlertDialog.Portal>
+          <AlertDialog.Backdrop className="fixed inset-0 z-[100] bg-black/60 transition-opacity data-[ending-style]:opacity-0 data-[starting-style]:opacity-0" />
+          <AlertDialog.Viewport className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+            <AlertDialog.Popup className="w-full max-w-sm rounded-lg border border-border bg-popover p-6 text-popover-foreground shadow-lg outline-none data-[ending-style]:scale-95 data-[starting-style]:scale-95 data-[ending-style]:opacity-0 data-[starting-style]:opacity-0 transition-[transform,opacity] duration-100">
+              <AlertDialog.Title className="text-base font-semibold">
+                Clear all photos?
+              </AlertDialog.Title>
+              <AlertDialog.Description className="mt-2 text-sm text-muted-foreground">
+                Remove all {photoOrder.length} photo
+                {photoOrder.length === 1 ? "" : "s"} from the catalog. Edits and
+                settings will be lost. This cannot be undone.
+              </AlertDialog.Description>
+              <div className="mt-6 flex justify-end gap-2">
+                <AlertDialog.Close
+                  render={
+                    <Button type="button" variant="outline" className="active:!translate-y-0">
+                      Cancel
+                    </Button>
+                  }
+                />
+                <Button
+                  type="button"
+                  variant="destructive"
+                  className="active:!translate-y-0"
+                  onClick={onConfirmClearAll}
+                >
+                  Clear all
+                </Button>
+              </div>
+            </AlertDialog.Popup>
+          </AlertDialog.Viewport>
+        </AlertDialog.Portal>
+      </AlertDialog.Root>
     </>
   );
 }

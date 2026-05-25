@@ -1,6 +1,6 @@
 import { BarChart3, Eye, Minus, Plus, RotateCcw } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { originalPreviewAdjustments } from "../editor/adjustments";
+import { DEFAULT_ADJUSTMENTS, originalPreviewAdjustments } from "../editor/adjustments";
 import {
   beginTransformSession,
   computePreviewFrame,
@@ -215,7 +215,16 @@ export function Viewport() {
     (preview?: boolean) => {
       const pipe = pipelineRef.current;
       const el = viewportRef.current;
-      if (!pipe || !image || !el) return;
+      if (!pipe || !el) return;
+
+      if (!image) {
+        setSocialLayout(null);
+        setImageFrameIfChanged(null);
+        pipe.clearImage();
+        pipe.fitToContainer();
+        pipe.render(DEFAULT_ADJUSTMENTS, false);
+        return;
+      }
 
       const previewMode = preview ?? useEditor.getState().cropEditing;
 
@@ -339,11 +348,16 @@ export function Viewport() {
   useEffect(() => {
     const pipe = pipelineRef.current;
     if (!pipe) return;
-    if (image) pipe.setImage(image);
-    else pipe.clearImage();
+    if (image) {
+      pipe.setImage(image);
+    } else {
+      pipe.clearImage();
+      endCompare();
+      resetView();
+    }
     paintFrame();
     setHistogramTick((t) => t + 1);
-  }, [image, paintFrame]);
+  }, [image, paintFrame, endCompare, resetView]);
 
   useEffect(() => {
     paintFrame();
