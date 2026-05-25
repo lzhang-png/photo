@@ -1,6 +1,7 @@
 import {
   clampScreenRect,
   clampScreenRectPosition,
+  getFullRotatedPreviewSize,
   getOutputSize,
   rotationRadians,
   scaleScreenRect,
@@ -131,8 +132,11 @@ export function computePreviewFrame(
   srcW: number,
   srcH: number,
   geom: Geometry,
+  cropPreview = false,
 ): ImageFrame {
-  const frameSize = getOutputSize(srcW, srcH, geom);
+  const frameSize = cropPreview
+    ? getFullRotatedPreviewSize(srcW, srcH, geom)
+    : getOutputSize(srcW, srcH, geom);
   return fitImageInBox(viewportW, viewportH, frameSize.width, frameSize.height);
 }
 
@@ -176,20 +180,25 @@ export function syncSessionAfterFrame(frame: ImageFrame, geom: Geometry) {
     (session.frame.dw !== frame.dw || session.frame.dh !== frame.dh);
 
   if (session.screenRect && frameResized && session.prevFrameW > 0 && session.prevFrameH > 0) {
-    session.screenRect = session.live.aspectLocked
-      ? clampScreenRectPosition(session.screenRect, frame.dw, frame.dh)
-      : fitRect(
-          scaleScreenRect(
-            session.screenRect,
-            session.prevFrameW,
-            session.prevFrameH,
+    const sx = frame.dw / session.prevFrameW;
+    const sy = frame.dh / session.prevFrameH;
+    const uniformResize = Math.abs(sx - sy) < 1e-4;
+    // Leveling changes preview aspect — keep the on-screen crop frame fixed.
+    session.screenRect =
+      session.live.aspectLocked && !uniformResize
+        ? clampScreenRectPosition(session.screenRect, frame.dw, frame.dh)
+        : fitRect(
+            scaleScreenRect(
+              session.screenRect,
+              session.prevFrameW,
+              session.prevFrameH,
+              frame.dw,
+              frame.dh,
+            ),
+            session.live,
             frame.dw,
             frame.dh,
-          ),
-          session.live,
-          frame.dw,
-          frame.dh,
-        );
+          );
   }
 
   if (!session.screenRect) {

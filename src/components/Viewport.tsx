@@ -248,6 +248,7 @@ export function Viewport() {
           image.width,
           image.height,
           liveGeometry,
+          previewMode,
         );
         setImageFrameIfChanged(frame);
         if (previewMode && isTransformSessionActive()) {
@@ -255,8 +256,8 @@ export function Viewport() {
         }
       }
 
-      pipe.fitToContainer(renderGeometry, false);
-      pipe.render(renderGeometry, false);
+      pipe.fitToContainer(renderGeometry, previewMode);
+      pipe.render(renderGeometry, previewMode);
     },
     [image, setImageFrameIfChanged, socialTemplate.enabled],
   );
@@ -387,6 +388,7 @@ export function Viewport() {
       image.width,
       image.height,
       g,
+      true,
     );
     setImageFrameIfChanged(frame);
 
