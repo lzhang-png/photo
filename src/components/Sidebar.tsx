@@ -1,4 +1,4 @@
-import { ClipboardCopy, ClipboardPaste, RotateCcw, RotateCw } from "lucide-react";
+import { ClipboardCopy, ClipboardPaste, Lock, LockOpen, RotateCcw, RotateCw } from "lucide-react";
 import { AdjustmentSlider } from "@/components/AdjustmentSlider";
 import { InfoTooltip } from "@/components/InfoTooltip";
 import { SidebarSection } from "@/components/SidebarSection";
@@ -22,6 +22,7 @@ import {
   TONE_SLIDERS,
 } from "../editor/adjustments";
 import {
+  cropPixelAspect,
   cropToAspect,
   DEFAULT_GEOMETRY,
   isDefaultGeometry,
@@ -36,6 +37,7 @@ import {
   selectValueToDenoise,
 } from "../editor/rawSettings";
 import { FILM_STOCKS } from "../editor/filmStocks";
+import { useFilmPreviewUrls } from "../hooks/useFilmPreviews";
 import {
   selectAdjustments,
   selectImage,
@@ -46,8 +48,7 @@ import {
 import { CurveEditor } from "./CurveEditor";
 import { cn } from "@/lib/utils";
 
-const ASPECT_PRESETS: { label: string; aspect: number | null }[] = [
-  { label: "Free", aspect: null },
+const ASPECT_PRESETS: { label: string; aspect: number }[] = [
   { label: "Original", aspect: -1 },
   { label: "1:1", aspect: 1 },
   { label: "4:3", aspect: 4 / 3 },
@@ -71,6 +72,7 @@ export function Sidebar() {
   const editSettingsClipboard = useEditor((s) => s.editSettingsClipboard);
   const geom = adj.geometry;
   const disabled = !image;
+  const filmPreviews = useFilmPreviewUrls();
 
   return (
     <aside className="flex h-full min-h-0 flex-col overflow-hidden border-l border-border bg-sidebar">
@@ -200,7 +202,7 @@ export function Sidebar() {
 
           <SidebarSection
             title="Transform"
-            hint="Crop: drag handles in crop mode · Level straightens horizons"
+            hint="Crop: drag to reposition, drag handles to resize · Level straightens horizons and auto-crops black corners"
           >
             <div className="flex gap-2">
               <Button
@@ -276,22 +278,46 @@ export function Sidebar() {
               Aspect ratio
             </p>
             <div className="grid grid-cols-3 gap-2">
+              <Button
+                type="button"
+                variant={geom.aspectLocked ? "default" : "outline"}
+                className="h-9"
+                disabled={disabled}
+                title={geom.aspectLocked ? "Unlock aspect ratio" : "Lock aspect ratio"}
+                onClick={() => {
+                  if (!image) return;
+                  if (geom.aspectLocked) {
+                    setGeometry({ aspectLocked: false });
+                    return;
+                  }
+                  setGeometry({
+                    aspectLocked: true,
+                    lockedAspect: cropPixelAspect(geom, image.width, image.height),
+                  });
+                }}
+              >
+                {geom.aspectLocked ? (
+                  <Lock className="size-4" />
+                ) : (
+                  <LockOpen className="size-4" />
+                )}
+              </Button>
               {ASPECT_PRESETS.map((p) => (
                 <Button
                   key={p.label}
                   type="button"
                   variant="outline"
                   className="h-9"
-                  disabled={disabled || p.aspect === null}
+                  disabled={disabled}
                   onClick={() => {
                     if (!image) return;
-                    if (p.aspect === null) return;
                     if (p.aspect === -1) {
                       setGeometry({
                         cropX: 0,
                         cropY: 0,
                         cropW: 1,
                         cropH: 1,
+                        aspectLocked: false,
                       });
                       return;
                     }
@@ -377,7 +403,7 @@ export function Sidebar() {
                   key={stock.id}
                   variant="outline"
                   className={cn(
-                    "h-auto min-h-9 px-2.5 py-2 leading-tight",
+                    "h-auto w-full flex-col items-stretch gap-1.5 px-2 py-2 text-center leading-tight whitespace-normal",
                     adj.film === stock.id &&
                       "border-primary bg-primary/15 text-foreground",
                   )}
@@ -385,7 +411,17 @@ export function Sidebar() {
                   title={stock.hint}
                   onPressedChange={() => setAdjustment("film", stock.id)}
                 >
-                  {stock.label}
+                  {filmPreviews[stock.id] ? (
+                    <img
+                      src={filmPreviews[stock.id]}
+                      alt=""
+                      className="aspect-video w-full rounded-sm object-cover ring-1 ring-border/60"
+                      draggable={false}
+                    />
+                  ) : (
+                    <span className="aspect-video w-full rounded-sm bg-muted ring-1 ring-border/60" />
+                  )}
+                  <span className="min-w-0 text-xs leading-tight">{stock.label}</span>
                 </Toggle>
               ))}
             </div>
@@ -393,7 +429,7 @@ export function Sidebar() {
 
           <SidebarSection
             title="Effects"
-            hint="Creative overlays — grain adds texture; vintage fades tones, warms color, and adds a soft vignette."
+            hint="Creative overlays — grain amount, size (coarse vs fine particles), and density (light even spread vs rich heavy grain); vintage fades tones, warms color, and adds a soft vignette."
           >
             <div className="space-y-5">
               {EFFECTS_SLIDERS.map((s) => (
@@ -408,18 +444,15 @@ export function Sidebar() {
             </div>
           </SidebarSection>
 
-          <section className="px-4 py-4">
-            <div className="mb-3 flex items-center gap-1.5">
-              <h3 className="text-base font-medium uppercase tracking-wider text-muted-foreground">
-                Tone Curve
-              </h3>
-              <InfoTooltip text="Drag points · click to add · double-click point to remove · double-click background to reset" />
-            </div>
+          <SidebarSection
+            title="Tone Curve"
+            hint="Drag points · click to add · double-click point to remove · double-click background to reset"
+          >
             <CurveEditor
               points={adj.curve}
               onChange={(c) => setAdjustment("curve", c)}
             />
-          </section>
+          </SidebarSection>
         </div>
       </ScrollArea>
     </aside>

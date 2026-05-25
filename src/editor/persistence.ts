@@ -35,6 +35,10 @@ export function cloneAdjustments(adj: Adjustments): Adjustments {
       typeof adj.luminanceNoise === "number" ? adj.luminanceNoise : 0,
     colorNoise: typeof adj.colorNoise === "number" ? adj.colorNoise : 0,
     filmGrain: typeof adj.filmGrain === "number" ? adj.filmGrain : 0,
+    filmGrainSize:
+      typeof adj.filmGrainSize === "number" ? adj.filmGrainSize : 0.5,
+    filmGrainDensity:
+      typeof adj.filmGrainDensity === "number" ? adj.filmGrainDensity : 0.5,
     vintage: typeof adj.vintage === "number" ? adj.vintage : 0,
     geometry: migrateGeometry(adj.geometry),
     curve: adj.curve.map((p) => ({ ...p })),

@@ -30,6 +30,8 @@ uniform float u_sharpen;
 uniform float u_luminanceNoise;
 uniform float u_colorNoise;
 uniform float u_filmGrain;
+uniform float u_filmGrainSize;
+uniform float u_filmGrainDensity;
 uniform float u_vintage;
 uniform vec2 u_texelSize;     // 1 / source image size in pixels
 uniform float u_flipY;
@@ -38,8 +40,10 @@ uniform float u_inputLinear;  // 1.0 if image texture is already linear (RAW), 0
 
 uniform vec4 u_crop;          // x, y, w, h in source UV space
 uniform vec2 u_cropSize;      // crop width/height in source pixels
+uniform vec2 u_outSize;       // inscribed output size in pixels (no black corners)
 uniform float u_angle;        // rotation radians (CW)
 uniform float u_cropPreview;  // 1 = full image + dimmed crop guide
+uniform vec4 u_cropOutRect;     // minU, minV, maxU, maxV in output UV (upright crop)
 
 // ------------------------------------------------------------------
 // sRGB <-> linear (piecewise, IEC 61966-2-1)
@@ -123,6 +127,49 @@ float hash21(vec2 p) {
   return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
 }
 
+// Bilinear-smoothed hash — fine silver-halide structure.
+float smoothHash(vec2 p) {
+  vec2 i = floor(p);
+  vec2 f = fract(p);
+  f = f * f * (3.0 - 2.0 * f);
+  float a = hash21(i);
+  float b = hash21(i + vec2(1.0, 0.0));
+  float c = hash21(i + vec2(0.0, 1.0));
+  float d = hash21(i + vec2(1.0, 1.0));
+  return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+}
+
+float filmGrainFine(vec2 p) {
+  float n = 0.0;
+  float weight = 0.5;
+  float scale = 1.0;
+  for (int i = 0; i < 2; i++) {
+    n += weight * (smoothHash(p * scale + float(i) * 13.7) - 0.5);
+    scale *= 2.4;
+    weight *= 0.45;
+  }
+  return n;
+}
+
+float worley(vec2 p) {
+  vec2 ip = floor(p);
+  vec2 fp = fract(p);
+  float md = 1.0;
+  for (int j = -1; j <= 1; j++) {
+    for (int i = -1; i <= 1; i++) {
+      vec2 g = vec2(float(i), float(j));
+      vec2 o = vec2(hash21(ip + g), hash21(ip + g + 47.3));
+      vec2 diff = g + o - fp;
+      md = min(md, dot(diff, diff));
+    }
+  }
+  return sqrt(md);
+}
+
+float filmGrainCoarse(vec2 p) {
+  return pow(1.0 - worley(p), 1.4);
+}
+
 vec3 applyFilm(vec3 c, vec2 uv) {
   if (u_film < 0.5) return c;
 
@@ -136,8 +183,8 @@ vec3 applyFilm(vec3 c, vec2 uv) {
     col.g *= 1.01;
     col.b *= 0.92;
     col = mix(vec3(l), col, 0.9);
-    col = (col - 0.5) * 0.9 + 0.52;
-    col += 0.035 * (1.0 - smoothstep(0.0, 0.45, l));
+    col = (col - 0.5) * 0.92 + 0.5;
+    col += 0.012 * (1.0 - smoothstep(0.0, 0.28, l));
     col.g *= 1.0 - 0.06 * smoothstep(0.25, 0.55, l);
     col += (hash21(uv * 1400.0) - 0.5) * 0.012;
     return clamp(col, 0.0, 1.0);
@@ -295,6 +342,49 @@ vec3 applyFilm(vec3 c, vec2 uv) {
     return clamp(col, 0.0, 1.0);
   }
 
+  // 13: Fujicolor Superia 400 — everyday daylight, green-shifted shadows
+  if (film == 13) {
+    col = (col - 0.5) * 1.02 + 0.5;
+    float sMask = 1.0 - smoothstep(0.0, 0.38, l);
+    float hMask = smoothstep(0.55, 1.0, l);
+    col += vec3(-0.02, 0.025, 0.01) * sMask;
+    col += vec3(0.02, 0.01, -0.015) * hMask;
+    vec3 hsv = rgb2hsv(max(col, 0.0));
+    hsv.y = min(hsv.y * 1.08, 1.0);
+    col = hsv2rgb(hsv);
+    col.g *= 1.04;
+    col += (hash21(uv * 1900.0) - 0.5) * 0.016;
+    return clamp(col, 0.0, 1.0);
+  }
+
+  // 14: Fujichrome Provia 100F — neutral, accurate slide color
+  if (film == 14) {
+    col = (col - 0.5) * 1.08 + 0.5;
+    vec3 hsv = rgb2hsv(max(col, 0.0));
+    hsv.y = min(hsv.y * 1.12, 1.0);
+    col = hsv2rgb(hsv);
+    col.b *= 1.03;
+    col.g *= 1.02;
+    float sMask = 1.0 - smoothstep(0.0, 0.35, l);
+    col += vec3(-0.008, 0.0, 0.012) * sMask;
+    col += (hash21(uv * 2400.0) - 0.5) * 0.006;
+    return clamp(col, 0.0, 1.0);
+  }
+
+  // 15: Ilford Delta 3200 — high-speed B&W, gritty, heavy grain
+  if (film == 15) {
+    float gray = l;
+    gray = (gray - 0.5) * 1.22 + 0.5;
+    gray = pow(gray, 0.96);
+    col = vec3(gray);
+    col.r *= 1.01;
+    col.b *= 0.98;
+    col = mix(col, vec3(lumaSrgb(col) * 0.98), smoothstep(0.65, 1.0, l));
+    col += (hash21(uv * 1200.0) - 0.5) * 0.055;
+    col += (hash21(uv * 900.0 + vec2(17.0, 43.0)) - 0.5) * 0.035;
+    return clamp(col, 0.0, 1.0);
+  }
+
   return clamp(col, 0.0, 1.0);
 }
 
@@ -318,31 +408,76 @@ vec3 applyVintage(vec3 c, vec2 outUV) {
   return clamp(c, 0.0, 1.0);
 }
 
-// Luminance-weighted grain in source UV space (moves with image content).
-vec3 applyFilmGrain(vec3 c, vec2 srcUV) {
-  if (u_filmGrain < 1e-5) return c;
+// Photographic grain in linear light — uniform base with subtle tone-linked variation.
+vec3 applyFilmGrain(vec3 cSrgb, vec2 srcUV) {
+  if (u_filmGrain < 1e-5) return cSrgb;
 
-  float l = lumaSrgb(c);
-  float mid = 4.0 * l * (1.0 - l);
-  float g1 = hash21(srcUV * 2400.0) - 0.5;
-  float g2 = hash21(srcUV * 1800.0 + vec2(31.0, 71.0)) - 0.5;
-  float grain = (g1 * 0.65 + g2 * 0.35) * u_filmGrain * 0.07 * (0.3 + mid);
-  c += vec3(grain);
-  return clamp(c, 0.0, 1.0);
+  vec3 lin = srgb_to_linear(clamp(cSrgb, 0.0, 1.0));
+  float density = clamp(luma_linear(lin), 0.02, 0.98);
+
+  // Scale grain to image resolution (~12 MP reference) so it stays visible
+  // when the canvas downscales a large photo for preview.
+  float srcShort = 1.0 / max(u_texelSize.x, u_texelSize.y);
+  float resScale = sqrt(max(srcShort * srcShort / 1.2e7, 0.35));
+  float sizeT = u_filmGrainSize - 0.5;
+  float sizeRange = mix(2.4, 0.75, smoothstep(0.0, 0.5, u_filmGrainSize));
+  float sizeMul = exp2(sizeT * sizeRange);
+  // Mostly uniform cell size, with slight tone-linked variation.
+  float toneShape = pow(density, 0.42);
+  float cell = 24.0 * resScale * sizeMul * mix(1.08, 0.92, toneShape);
+
+  vec2 pix = srcUV / max(u_texelSize, vec2(1e-6));
+  vec2 g = pix / cell;
+
+  // Gentle tone-driven warp — darker areas shift the lattice a little more.
+  float warpAmt = mix(0.5, 0.85, toneShape);
+  g += vec2(
+    filmGrainFine(g * 0.32 + 1.7),
+    filmGrainFine(g * 0.32 + 9.3)
+  ) * warpAmt;
+
+  // Per-macro-cell random rotation, modulated by local brightness.
+  vec2 cellId = floor(pix / (cell * 3.5));
+  float phase = hash21(cellId) * 6.28318;
+  g += vec2(cos(phase), sin(phase)) * (density - 0.5) * 0.2;
+
+  float coarse =
+    filmGrainCoarse(g) * 0.68 +
+    filmGrainCoarse(g * 0.52 + 6.4) * 0.32;
+  coarse *= mix(1.06, 0.94, toneShape);
+  float fine =
+    filmGrainFine(g * 4.5 + 2.2) * 0.55 +
+    filmGrainFine(g * 8.0 - 3.1) * 0.25 +
+    filmGrainFine(g * 14.0 + 5.7) * 0.12;
+  fine *= mix(0.94, 1.06, toneShape);
+
+  // Density: low = light, evenly spread fine pepper; high = richer coarse + fine mix.
+  float coarseMix = mix(0.32, 1.05, u_filmGrainDensity);
+  float fineMix = mix(1.08, 1.45, u_filmGrainDensity);
+  float densityAmp = mix(0.52, 1.0, u_filmGrainDensity);
+
+  float grain =
+    ((coarse - 0.5) * 1.15 * coarseMix + fine * fineMix) * densityAmp;
+  vec3 grainRgb = vec3(grain);
+
+  float mid = 4.0 * density * (1.0 - density);
+  float tone = mix(0.55, 1.0, mid);
+  tone *= 1.0 - smoothstep(0.92, 0.995, density);
+  float strength = u_filmGrain * tone;
+
+  lin *= 1.0 + grainRgb * strength * 0.55;
+  lin += grainRgb * strength * 0.035 * (1.0 - smoothstep(0.0, 0.18, density));
+
+  vec3 outSrgb = clamp(linear_to_srgb(max(lin, vec3(0.0))), 0.0, 1.0);
+  // Perceptual boost so grain survives preview downscaling.
+  outSrgb += grainRgb * strength * 0.045;
+  return clamp(outSrgb, 0.0, 1.0);
 }
 
 vec2 mapOutputUV(vec2 uv) {
-  if (u_cropPreview > 0.5) {
-    return vec2(uv.x, mix(uv.y, 1.0 - uv.y, u_flipY));
-  }
-
   vec2 cropSize = max(u_cropSize, vec2(1.0));
-  float c = abs(cos(u_angle));
-  float s = abs(sin(u_angle));
-  vec2 outSize = vec2(
-    cropSize.x * c + cropSize.y * s,
-    cropSize.x * s + cropSize.y * c
-  );
+  vec2 outSize = max(u_outSize, vec2(1.0));
+  vec4 rotCrop = u_cropPreview > 0.5 ? vec4(0.0, 0.0, 1.0, 1.0) : u_crop;
 
   vec2 p = (uv - 0.5) * outSize;
   float ca = cos(-u_angle);
@@ -355,9 +490,9 @@ vec2 mapOutputUV(vec2 uv) {
     return vec2(-1.0);
   }
   vec2 texUV;
-  texUV.x = u_crop.x + (local.x / cropSize.x) * u_crop.z;
+  texUV.x = rotCrop.x + (local.x / cropSize.x) * rotCrop.z;
   // cropY is stored from the visual top; texture v=0 is also the visual top.
-  texUV.y = u_crop.y + (1.0 - local.y / cropSize.y) * u_crop.w;
+  texUV.y = rotCrop.y + (1.0 - local.y / cropSize.y) * rotCrop.w;
   return texUV;
 }
 
@@ -431,14 +566,16 @@ void main() {
   vec2 uv = mapOutputUV(v_uv);
 
   if (u_cropPreview > 0.5) {
-    vec2 srcUV = uv;
-    vec3 c = texture(u_image, srcUV).rgb;
+    if (uv.x < 0.0) {
+      fragColor = vec4(0.0, 0.0, 0.0, 1.0);
+      return;
+    }
+    vec3 c = texture(u_image, uv).rgb;
     // In crop-preview we want the original encoded sample to dim against —
     // if the input is linear, convert to sRGB for display.
     if (u_inputLinear > 0.5) c = linear_to_srgb(max(c, vec3(0.0)));
-    vec2 local = (srcUV - u_crop.xy) / max(u_crop.zw, vec2(0.0001));
-    float inside = step(0.0, local.x) * step(local.x, 1.0) *
-                   step(0.0, local.y) * step(local.y, 1.0);
+    float inside = step(u_cropOutRect.x, v_uv.x) * step(v_uv.x, u_cropOutRect.z) *
+                   step(u_cropOutRect.y, v_uv.y) * step(v_uv.y, u_cropOutRect.w);
     c *= mix(0.35, 1.0, inside);
     fragColor = vec4(c, 1.0);
     return;

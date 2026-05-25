@@ -1,17 +1,29 @@
-import { useCallback, useEffect, useId, useRef, useState } from "react";
-import type { Geometry } from "../editor/geometry";
-import { normalizeGeometry } from "../editor/geometry";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import type { Geometry, ScreenRect } from "../editor/geometry";
+import {
+  clampScreenRect,
+  clampScreenRectPosition,
+  clampSourceCropInBoundsPreserveAspect,
+  constrainCropAspect,
+  rotationRadians,
+  screenRectToSourceCrop,
+  sourceCropToScreenRect,
+} from "../editor/geometry";
 import type { DecodedImage } from "../editor/pipeline";
 
 type Props = {
   image: DecodedImage;
   geometry: Geometry;
-  onChange: (patch: Partial<Geometry>) => void;
+  screenRect: ScreenRect;
+  onScreenRectChange: (
+    rect: ScreenRect,
+    sourceCrop?: Pick<Geometry, "cropX" | "cropY" | "cropW" | "cropH">,
+  ) => void;
   containerRef: React.RefObject<HTMLDivElement | null>;
 };
 
 type DragMode =
-  | "move"
+  | "pan"
   | "nw"
   | "ne"
   | "sw"
@@ -21,68 +33,88 @@ type DragMode =
   | "e"
   | "w";
 
-type ImageRect = { ox: number; oy: number; dw: number; dh: number };
+const MIN_SCREEN = 24;
 
-function imageRect(
-  containerW: number,
-  containerH: number,
-  imgW: number,
-  imgH: number,
-): ImageRect {
-  const scale = Math.min(containerW / imgW, containerH / imgH);
-  const dw = imgW * scale;
-  const dh = imgH * scale;
-  return {
-    ox: (containerW - dw) / 2,
-    oy: (containerH - dh) / 2,
-    dw,
-    dh,
-  };
+function adjustScreenRect(
+  start: ScreenRect,
+  dx: number,
+  dy: number,
+  mode: DragMode,
+): ScreenRect {
+  let { x, y, w, h } = start;
+
+  if (mode.includes("w")) {
+    x += dx;
+    w -= dx;
+  }
+  if (mode.includes("e")) {
+    w += dx;
+  }
+  if (mode.includes("n")) {
+    y += dy;
+    h -= dy;
+  }
+  if (mode.includes("s")) {
+    h += dy;
+  }
+
+  if (w < MIN_SCREEN) {
+    if (mode.includes("w") && !mode.includes("e")) x += w - MIN_SCREEN;
+    w = MIN_SCREEN;
+  }
+  if (h < MIN_SCREEN) {
+    if (mode.includes("n") && !mode.includes("s")) y += h - MIN_SCREEN;
+    h = MIN_SCREEN;
+  }
+
+  return { x, y, w, h };
 }
 
-function screenToNorm(
-  clientX: number,
-  clientY: number,
-  rect: DOMRect,
-  ir: ImageRect,
-): { x: number; y: number } {
-  const px = clientX - rect.left - ir.ox;
-  const py = clientY - rect.top - ir.oy;
+function panPhotoRect(start: ScreenRect, dx: number, dy: number): ScreenRect {
   return {
-    x: Math.max(0, Math.min(1, px / ir.dw)),
-    y: Math.max(0, Math.min(1, py / ir.dh)),
+    x: start.x + dx,
+    y: start.y + dy,
+    w: start.w,
+    h: start.h,
   };
 }
 
 export function TransformOverlay({
   image,
   geometry,
-  onChange,
+  screenRect,
+  onScreenRectChange,
   containerRef,
 }: Props) {
   const [layout, setLayout] = useState<{
     container: DOMRect;
     viewW: number;
     viewH: number;
-    image: ImageRect;
   } | null>(null);
+  const [isPanning, setIsPanning] = useState(false);
   const maskId = useId();
   const dragRef = useRef<{
     mode: DragMode;
     startGeom: Geometry;
-    startX: number;
-    startY: number;
+    startRect: ScreenRect;
+    startClientX: number;
+    startClientY: number;
   } | null>(null);
+
+  const angleRad = rotationRadians(geometry);
+  const imgW = image.width;
+  const imgH = image.height;
 
   const measure = useCallback(() => {
     const el = containerRef.current;
     if (!el) return;
     const container = el.getBoundingClientRect();
-    const viewW = el.clientWidth;
-    const viewH = el.clientHeight;
-    const ir = imageRect(viewW, viewH, image.width, image.height);
-    setLayout({ container, viewW, viewH, image: ir });
-  }, [containerRef, image.width, image.height]);
+    setLayout({
+      container,
+      viewW: el.clientWidth,
+      viewH: el.clientHeight,
+    });
+  }, [containerRef]);
 
   useEffect(() => {
     measure();
@@ -101,44 +133,80 @@ export function TransformOverlay({
     const onMove = (e: PointerEvent) => {
       const drag = dragRef.current;
       if (!drag || !layout) return;
-      const { x, y } = screenToNorm(
-        e.clientX,
-        e.clientY,
-        layout.container,
-        layout.image,
-      );
-      const dx = x - drag.startX;
-      const dy = y - drag.startY;
-      const g = drag.startGeom;
-      let { cropX, cropY, cropW, cropH } = g;
 
-      if (drag.mode === "move") {
-        cropX = g.cropX + dx;
-        cropY = g.cropY + dy;
-      } else {
-        if (drag.mode.includes("w")) {
-          cropX = g.cropX + dx;
-          cropW = g.cropW - dx;
-        }
-        if (drag.mode.includes("e")) {
-          cropW = g.cropW + dx;
-        }
-        if (drag.mode.includes("n")) {
-          cropY = g.cropY + dy;
-          cropH = g.cropH - dy;
-        }
-        if (drag.mode.includes("s")) {
-          cropH = g.cropH + dy;
-        }
+      const dx = e.clientX - drag.startClientX;
+      const dy = e.clientY - drag.startClientY;
+
+      if (drag.mode === "pan") {
+        const rect = clampScreenRectPosition(
+          panPhotoRect(drag.startRect, dx, dy),
+          layout.viewW,
+          layout.viewH,
+        );
+        onScreenRectChange(rect);
+        return;
       }
 
-      onChange(
-        normalizeGeometry({ ...g, cropX, cropY, cropW, cropH }),
+      let rect = adjustScreenRect(drag.startRect, dx, dy, drag.mode);
+      const aspectLocked = drag.startGeom.aspectLocked;
+
+      if (!aspectLocked) {
+        rect = clampScreenRect(rect, layout.viewW, layout.viewH);
+      }
+
+      let { cropX, cropY, cropW, cropH } = screenRectToSourceCrop(
+        rect,
+        imgW,
+        imgH,
+        angleRad,
+        layout.viewW,
+        layout.viewH,
       );
+
+      if (aspectLocked) {
+        const constrained = constrainCropAspect(
+          drag.startGeom,
+          cropX,
+          cropY,
+          cropW,
+          cropH,
+          drag.mode,
+          imgW,
+          imgH,
+        );
+        const clamped = clampSourceCropInBoundsPreserveAspect(
+          constrained.cropX,
+          constrained.cropY,
+          constrained.cropW,
+          constrained.cropH,
+          drag.startGeom.lockedAspect,
+          imgW,
+          imgH,
+          drag.mode,
+        );
+        ({ cropX, cropY, cropW, cropH } = clamped);
+        rect = clampScreenRectPosition(
+          sourceCropToScreenRect(
+            clamped,
+            imgW,
+            imgH,
+            angleRad,
+            layout.viewW,
+            layout.viewH,
+          ),
+          layout.viewW,
+          layout.viewH,
+        );
+        onScreenRectChange(rect, clamped);
+        return;
+      }
+
+      onScreenRectChange(rect);
     };
 
     const onUp = () => {
       dragRef.current = null;
+      setIsPanning(false);
     };
 
     window.addEventListener("pointermove", onMove);
@@ -149,52 +217,83 @@ export function TransformOverlay({
       window.removeEventListener("pointerup", onUp);
       window.removeEventListener("pointercancel", onUp);
     };
-  }, [layout, onChange]);
+  }, [layout, onScreenRectChange, imgW, imgH, angleRad]);
 
-  if (!layout) return null;
+  const cropScreen = useMemo(() => {
+    if (!layout) return null;
+    const { x, y, w, h } = screenRect;
+    if (w < 1 || h < 1) return null;
 
-  const { ox, oy, dw, dh } = layout.image;
-  const left = ox + geometry.cropX * dw;
-  const top = oy + geometry.cropY * dh;
-  const width = geometry.cropW * dw;
-  const height = geometry.cropH * dh;
+    const { viewW, viewH } = layout;
+    const outsidePan: ScreenRect[] = [];
+    if (y > 0) outsidePan.push({ x: 0, y: 0, w: viewW, h: y });
+    if (y + h < viewH) {
+      outsidePan.push({ x: 0, y: y + h, w: viewW, h: viewH - y - h });
+    }
+    if (x > 0) outsidePan.push({ x: 0, y, w: x, h });
+    if (x + w < viewW) {
+      outsidePan.push({ x: x + w, y, w: viewW - x - w, h });
+    }
+
+    const handles: Array<[DragMode, number, number, string]> = [
+      ["nw", x, y, "cursor-nwse-resize"],
+      ["ne", x + w, y, "cursor-nesw-resize"],
+      ["se", x + w, y + h, "cursor-nwse-resize"],
+      ["sw", x, y + h, "cursor-nesw-resize"],
+      ["n", x + w / 2, y, "cursor-ns-resize"],
+      ["s", x + w / 2, y + h, "cursor-ns-resize"],
+      ["e", x + w, y + h / 2, "cursor-ew-resize"],
+      ["w", x, y + h / 2, "cursor-ew-resize"],
+    ];
+    const grid = [
+      [x + w / 3, y, x + w / 3, y + h],
+      [x + (2 * w) / 3, y, x + (2 * w) / 3, y + h],
+      [x, y + h / 3, x + w, y + h / 3],
+      [x, y + (2 * h) / 3, x + w, y + (2 * h) / 3],
+    ] as const;
+
+    return { rect: screenRect, outsidePan, handles, grid };
+  }, [layout, screenRect]);
+
+  if (!layout || !cropScreen) return null;
+
+  const { viewW, viewH } = layout;
+  const { rect, outsidePan, handles, grid } = cropScreen;
+
+  const panCursor = isPanning ? "cursor-grabbing" : "cursor-grab";
 
   const startDrag = (mode: DragMode, e: React.PointerEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    const { x, y } = screenToNorm(
-      e.clientX,
-      e.clientY,
-      layout.container,
-      layout.image,
-    );
+    e.currentTarget.setPointerCapture(e.pointerId);
+    if (mode === "pan") setIsPanning(true);
     dragRef.current = {
       mode,
       startGeom: { ...geometry },
-      startX: x,
-      startY: y,
+      startRect: { ...rect },
+      startClientX: e.clientX,
+      startClientY: e.clientY,
     };
   };
 
   const handleSize = 12;
-
   const handleClass =
     "pointer-events-auto fill-white stroke-[oklch(0.68_0.14_250)] stroke-2 hover:fill-primary/20";
 
   return (
     <svg
       className="pointer-events-none absolute inset-0 size-full"
-      viewBox={`0 0 ${layout.viewW} ${layout.viewH}`}
+      viewBox={`0 0 ${viewW} ${viewH}`}
       preserveAspectRatio="none"
     >
       <defs>
         <mask id={maskId}>
           <rect width="100%" height="100%" fill="white" />
           <rect
-            x={left}
-            y={top}
-            width={width}
-            height={height}
+            x={rect.x}
+            y={rect.y}
+            width={rect.w}
+            height={rect.h}
             fill="black"
           />
         </mask>
@@ -206,29 +305,38 @@ export function TransformOverlay({
         mask={`url(#${maskId})`}
         pointerEvents="none"
       />
+      {outsidePan.map((zone, i) => (
+        <rect
+          key={`outside-${i}`}
+          x={zone.x}
+          y={zone.y}
+          width={zone.w}
+          height={zone.h}
+          fill="transparent"
+          className={`pointer-events-auto ${panCursor}`}
+          onPointerDown={(e) => startDrag("pan", e)}
+        />
+      ))}
       <rect
-        x={left}
-        y={top}
-        width={width}
-        height={height}
+        x={rect.x}
+        y={rect.y}
+        width={rect.w}
+        height={rect.h}
+        fill="transparent"
+        className={`pointer-events-auto ${panCursor}`}
+        onPointerDown={(e) => startDrag("pan", e)}
+      />
+      <rect
+        x={rect.x}
+        y={rect.y}
+        width={rect.w}
+        height={rect.h}
         fill="none"
         stroke="oklch(0.68 0.14 250)"
         strokeWidth={2}
-        className="pointer-events-auto cursor-move"
-        onPointerDown={(e) => startDrag("move", e)}
+        pointerEvents="none"
       />
-      {(
-        [
-          ["nw", left, top, "cursor-nwse-resize"],
-          ["ne", left + width, top, "cursor-nesw-resize"],
-          ["sw", left, top + height, "cursor-nesw-resize"],
-          ["se", left + width, top + height, "cursor-nwse-resize"],
-          ["n", left + width / 2, top, "cursor-ns-resize"],
-          ["s", left + width / 2, top + height, "cursor-ns-resize"],
-          ["w", left, top + height / 2, "cursor-ew-resize"],
-          ["e", left + width, top + height / 2, "cursor-ew-resize"],
-        ] as const
-      ).map(([mode, cx, cy, cursor]) => (
+      {handles.map(([mode, cx, cy, cursor]) => (
         <rect
           key={mode}
           x={cx - handleSize / 2}
@@ -240,38 +348,17 @@ export function TransformOverlay({
           onPointerDown={(e) => startDrag(mode, e)}
         />
       ))}
-      <line
-        x1={left + width / 3}
-        y1={top}
-        x2={left + width / 3}
-        y2={top + height}
-        stroke="rgba(255,255,255,0.35)"
-        pointerEvents="none"
-      />
-      <line
-        x1={left + (2 * width) / 3}
-        y1={top}
-        x2={left + (2 * width) / 3}
-        y2={top + height}
-        stroke="rgba(255,255,255,0.35)"
-        pointerEvents="none"
-      />
-      <line
-        x1={left}
-        y1={top + height / 3}
-        x2={left + width}
-        y2={top + height / 3}
-        stroke="rgba(255,255,255,0.35)"
-        pointerEvents="none"
-      />
-      <line
-        x1={left}
-        y1={top + (2 * height) / 3}
-        x2={left + width}
-        y2={top + (2 * height) / 3}
-        stroke="rgba(255,255,255,0.35)"
-        pointerEvents="none"
-      />
+      {grid.map(([x1, y1, x2, y2], i) => (
+        <line
+          key={i}
+          x1={x1}
+          y1={y1}
+          x2={x2}
+          y2={y2}
+          stroke="rgba(255,255,255,0.35)"
+          pointerEvents="none"
+        />
+      ))}
     </svg>
   );
 }

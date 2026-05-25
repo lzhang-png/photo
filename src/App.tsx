@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   useEditor,
   selectAdjustments,
@@ -18,6 +18,7 @@ import {
   saveUiPrefs,
 } from "./editor/uiPrefs";
 import { downloadBlob, downloadZip, exportImage, uniqueFilename } from "./editor/export";
+import { pickPhotoFiles, loadDirectoryHandle } from "./editor/fileAccess";
 import { decode } from "./editor/decode";
 import { createBatchProgressReporter } from "./editor/decodeProgress";
 import { Badge } from "@/components/ui/badge";
@@ -32,6 +33,11 @@ export function App() {
   const adjustments = useEditor(selectAdjustments);
   const photoOrder = useEditor((s) => s.photoOrder);
   const needsReopen = useEditor(selectNeedsReopen);
+  const restoringFiles = useEditor((s) => s.restoringFiles);
+  const restoreCachedFiles = useEditor((s) => s.restoreCachedFiles);
+  const reopenPhotosFromDirectory = useEditor((s) => s.reopenPhotosFromDirectory);
+  const importPhotoFiles = useEditor((s) => s.importPhotoFiles);
+  const sourceDirectoryName = useEditor((s) => s.sourceDirectoryName);
   const resetAdjustments = useEditor((s) => s.resetAdjustments);
   const setStatus = useEditor((s) => s.setStatus);
   const setDecodeProgress = useEditor((s) => s.setDecodeProgress);
@@ -44,7 +50,34 @@ export function App() {
     saveUiPrefs({ sidebarWidth: width });
   }, []);
 
+  useEffect(() => {
+    void (async () => {
+      await restoreCachedFiles();
+      if (!selectNeedsReopen(useEditor.getState())) return;
+      const handle = await loadDirectoryHandle();
+      if (
+        handle &&
+        (await handle.queryPermission({ mode: "read" })) === "granted"
+      ) {
+        await reopenPhotosFromDirectory();
+      }
+    })();
+  }, [restoreCachedFiles, reopenPhotosFromDirectory]);
+
   const hasCatalog = photoOrder.length > 0;
+
+  const onOpen = async () => {
+    try {
+      const picked = await pickPhotoFiles();
+      if (picked === null) {
+        document.getElementById("file-input")?.click();
+        return;
+      }
+      await importPhotoFiles(picked);
+    } catch (err) {
+      setStatus(`Open failed: ${(err as Error).message}`);
+    }
+  };
 
   const onExport = async () => {
     if (!image || !filename) return;
@@ -155,10 +188,7 @@ export function App() {
     >
       <header className="col-span-full flex h-12 shrink-0 items-center gap-2.5 border-b border-border bg-sidebar px-4">
         <span className="text-base font-semibold tracking-wide">Photo</span>
-        <Button
-          variant="outline"
-          onClick={() => document.getElementById("file-input")?.click()}
-        >
+        <Button variant="outline" onClick={onOpen}>
           Open…
         </Button>
         <Button variant="outline" onClick={resetAdjustments} disabled={!hasCatalog}>
@@ -170,10 +200,23 @@ export function App() {
             <StatusPill status={status} progress={decodeProgress} />
           ) : null}
         </div>
-        {needsReopen && (
-          <Badge variant="outline" className="border-primary/40 text-primary">
-            Re-open files
-          </Badge>
+        {needsReopen && !restoringFiles && (
+          <Button
+            variant="outline"
+            className="max-w-[220px] border-primary/40 text-primary"
+            title={
+              sourceDirectoryName
+                ? `Re-open from ${sourceDirectoryName}. Shift-click to choose a different folder.`
+                : "Choose your photo folder once — it will be remembered for one-click re-open."
+            }
+            onClick={(e) =>
+              reopenPhotosFromDirectory({ pickNewFolder: e.shiftKey })
+            }
+          >
+            <span className="truncate">
+              Re-open{sourceDirectoryName ? ` · ${sourceDirectoryName}` : ""}
+            </span>
+          </Button>
         )}
         {filename && (
           <span

@@ -13,7 +13,9 @@ import {
 import type { DecodedImage } from "../editor/pipeline";
 import { createThumbnailSafe } from "../editor/thumbnail";
 import {
+  clampCropForRotation,
   normalizeGeometry,
+  preserveCropAcrossRotation,
   type Geometry,
 } from "../editor/geometry";
 import type { DecodeProgress } from "../editor/decodeProgress";
@@ -22,6 +24,22 @@ import {
   type RawSettings,
 } from "../editor/rawSettings";
 import { loadUiPrefs, saveUiPrefs } from "../editor/uiPrefs";
+import {
+  cacheSourceFile,
+  clearSourceFileCache,
+  deleteCachedSourceFile,
+  loadCachedSourceFile,
+} from "../editor/fileCache";
+import {
+  clearDirectoryHandle,
+  ensureDirectoryReadAccess,
+  findFilesInDirectory,
+  loadDirectoryHandle,
+  pickPhotoDirectory,
+  saveDirectoryHandle,
+  supportsDirectoryPicker,
+} from "../editor/fileAccess";
+import { importPhotoFiles as importPhotoFilesImpl } from "../editor/importPhotos";
 
 export type PhotoRecord = {
   id: PhotoId;
@@ -44,6 +62,8 @@ type EditorState = {
   cropEditing: boolean;
   showHistogram: boolean;
   editSettingsClipboard: EditSettings | null;
+  restoringFiles: boolean;
+  sourceDirectoryName: string | null;
 
   addPhoto: (
     image: DecodedImage,
@@ -73,6 +93,9 @@ type EditorState = {
   toggleHistogram: () => void;
   setShowHistogram: (visible: boolean) => void;
   clearCatalog: () => void;
+  restoreCachedFiles: () => Promise<void>;
+  importPhotoFiles: (files: File[]) => Promise<void>;
+  reopenPhotosFromDirectory: (options?: { pickNewFolder?: boolean }) => Promise<void>;
 };
 
 function buildInitialCatalog(): Pick<
@@ -174,6 +197,8 @@ export const useEditor = create<EditorState>((set, get) => ({
   cropEditing: false,
   showHistogram: initialPrefs.showHistogram,
   editSettingsClipboard: null,
+  restoringFiles: false,
+  sourceDirectoryName: initialPrefs.sourceDirectoryName,
 
   addPhoto: (image, file, isRaw, makeActive = true) => {
     const fingerprint = fileFingerprint(file);
@@ -193,6 +218,7 @@ export const useEditor = create<EditorState>((set, get) => ({
         activePhotoId: makeActive ? existing.id : s.activePhotoId,
       }));
       schedulePersist(get);
+      void cacheSourceFile(existing.id, file).catch(() => {});
       return existing.id;
     }
 
@@ -218,6 +244,7 @@ export const useEditor = create<EditorState>((set, get) => ({
       activePhotoId: makeActive ? id : s.activePhotoId ?? id,
     }));
     schedulePersist(get);
+    void cacheSourceFile(id, file).catch(() => {});
     return id;
   },
 
@@ -240,6 +267,7 @@ export const useEditor = create<EditorState>((set, get) => ({
       return { photos: rest, photoOrder, activePhotoId };
     });
     schedulePersist(get);
+    void deleteCachedSourceFile(id).catch(() => {});
   },
 
   setDecodedImage: (image) => {
@@ -266,10 +294,29 @@ export const useEditor = create<EditorState>((set, get) => ({
     set((s) => {
       const active = getActive(s);
       if (!active) return {};
-      const geometry = normalizeGeometry({
-        ...active.adjustments.geometry,
-        ...patch,
-      });
+      const prev = active.adjustments.geometry;
+      const merged = { ...prev, ...patch };
+      const rotationChanged =
+        merged.straighten !== prev.straighten ||
+        merged.rotate90 !== prev.rotate90;
+
+      let geometry = merged;
+      if (active.image && rotationChanged && !get().cropEditing) {
+        geometry = preserveCropAcrossRotation(
+          prev,
+          merged,
+          active.image.width,
+          active.image.height,
+        );
+      }
+      geometry = normalizeGeometry(geometry);
+      if (active.image && !rotationChanged && !get().cropEditing) {
+        geometry = clampCropForRotation(
+          geometry,
+          active.image.width,
+          active.image.height,
+        );
+      }
       return updateActive(s, {
         adjustments: { ...active.adjustments, geometry },
       });
@@ -350,8 +397,115 @@ export const useEditor = create<EditorState>((set, get) => ({
       activePhotoId: null,
       cropEditing: false,
       editSettingsClipboard: null,
+      sourceDirectoryName: null,
     });
     localStorage.removeItem(STORAGE_KEY);
+    saveUiPrefs({ sourceDirectoryName: null });
+    void clearSourceFileCache().catch(() => {});
+    void clearDirectoryHandle().catch(() => {});
+  },
+
+  restoreCachedFiles: async () => {
+    const s = get();
+    const missing = s.photoOrder.filter((id) => !s.photos[id]?.sourceFile);
+    if (missing.length === 0) return;
+
+    set({ restoringFiles: true });
+    try {
+      const photos = { ...get().photos };
+      let restored = 0;
+
+      await Promise.all(
+        missing.map(async (id) => {
+          const record = photos[id];
+          if (!record) return;
+          const file = await loadCachedSourceFile(id);
+          if (!file) return;
+          photos[id] = { ...record, sourceFile: file };
+          restored++;
+        }),
+      );
+
+      if (restored > 0) {
+        set({
+          photos,
+          status: restored === 1 ? "Restored 1 photo" : `Restored ${restored} photos`,
+        });
+      }
+    } catch {
+      // IndexedDB unavailable — user can still re-open manually.
+    } finally {
+      set({ restoringFiles: false });
+    }
+  },
+
+  importPhotoFiles: async (files) => {
+    await importPhotoFilesImpl(files, {
+      addPhoto: (image, file, isRaw, makeActive) =>
+        get().addPhoto(image, file, isRaw, makeActive),
+      setStatus: (msg) => set({ status: msg }),
+      setDecodeProgress: (progress) => set({ decodeProgress: progress }),
+    });
+  },
+
+  reopenPhotosFromDirectory: async (options = {}) => {
+    const s = get();
+    const missing = s.photoOrder.filter((id) => !s.photos[id]?.sourceFile);
+    if (missing.length === 0) return;
+
+    if (!supportsDirectoryPicker()) {
+      set({ status: "Use Open… to re-select your photo files" });
+      return;
+    }
+
+    set({ restoringFiles: true });
+    try {
+      let handle = options.pickNewFolder ? null : await loadDirectoryHandle();
+      if (!handle) {
+        handle = await pickPhotoDirectory();
+        if (!handle) return;
+      } else if (!(await ensureDirectoryReadAccess(handle))) {
+        return;
+      }
+
+      await saveDirectoryHandle(handle);
+      saveUiPrefs({ sourceDirectoryName: handle.name });
+      set({ sourceDirectoryName: handle.name });
+
+      const fingerprints = new Set(
+        missing.map((id) => s.photos[id]!.fingerprint),
+      );
+      const found = await findFilesInDirectory(handle, fingerprints);
+
+      const photos = { ...get().photos };
+      let restored = 0;
+      for (const id of missing) {
+        const record = photos[id];
+        if (!record) continue;
+        const file = found.get(record.fingerprint);
+        if (!file) continue;
+        photos[id] = { ...record, sourceFile: file };
+        void cacheSourceFile(id, file).catch(() => {});
+        restored++;
+      }
+
+      if (restored === 0) {
+        set({ status: `No saved photos found in ${handle.name}` });
+        return;
+      }
+
+      set({
+        photos,
+        status:
+          restored === 1
+            ? `Re-opened 1 photo from ${handle.name}`
+            : `Re-opened ${restored} photos from ${handle.name}`,
+      });
+    } catch (err) {
+      set({ status: `Re-open failed: ${(err as Error).message}` });
+    } finally {
+      set({ restoringFiles: false });
+    }
   },
 }));
 

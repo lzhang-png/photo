@@ -11,7 +11,10 @@ export type FilmId =
   | "polaroid"
   | "trix"
   | "hp5"
-  | "acros";
+  | "acros"
+  | "superia"
+  | "provia"
+  | "delta3200";
 
 export type FilmStock = {
   id: FilmId;
@@ -30,9 +33,12 @@ export const FILM_STOCKS: FilmStock[] = [
   { id: "cinestill", label: "CineStill 800T", hint: "Tungsten cool shadows, warm glow" },
   { id: "lomo", label: "Lomo", hint: "Vivid, vignetted, cross-processed feel" },
   { id: "polaroid", label: "Polaroid 600", hint: "Faded shadows, instant film tones" },
+  { id: "superia", label: "Superia 400", hint: "Everyday daylight color, green-shifted shadows" },
+  { id: "provia", label: "Provia 100F", hint: "Neutral, accurate slide color" },
   { id: "trix", label: "Tri-X 400", hint: "Classic B&W with rich grain" },
   { id: "hp5", label: "HP5+", hint: "Smooth medium-contrast B&W" },
   { id: "acros", label: "Acros 100", hint: "Clean, fine-grain B&W with deep blacks" },
+  { id: "delta3200", label: "Delta 3200", hint: "High-speed B&W with gritty grain" },
 ];
 
 /** Values passed to the fragment shader `u_film` uniform. */
@@ -50,4 +56,7 @@ export const FILM_SHADER_INDEX: Record<FilmId, number> = {
   polaroid: 10,
   hp5: 11,
   acros: 12,
+  superia: 13,
+  provia: 14,
+  delta3200: 15,
 };

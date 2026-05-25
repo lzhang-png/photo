@@ -1,9 +1,22 @@
 import { BarChart3, Eye, Minus, Plus, RotateCcw } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { originalPreviewAdjustments } from "../editor/adjustments";
+import {
+  clampScreenRect,
+  clampScreenRectPosition,
+  getFullRotatedPreviewSize,
+  rotationRadians,
+  scaleScreenRect,
+  screenRectToOutputRect,
+  screenRectToSourceCrop,
+  sourceCropToScreenRect,
+  type Geometry,
+  type ScreenRect,
+} from "../editor/geometry";
 import { fitImageInBox, type ImageFrame } from "../editor/viewLayout";
 import { Button } from "@/components/ui/button";
-import { decode, isRawFile } from "../editor/decode";
+import { decode } from "../editor/decode";
+import { supportsDirectoryPicker } from "../editor/fileAccess";
 import { createBatchProgressReporter } from "../editor/decodeProgress";
 import { Pipeline } from "../editor/pipeline";
 import {
@@ -63,6 +76,14 @@ export function Viewport() {
     startPanX: 0,
     startPanY: 0,
   });
+  const cropTrackRef = useRef<{
+    geometry: Geometry;
+    frameW: number;
+    frameH: number;
+  } | null>(null);
+  const cropScreenRectRef = useRef<ScreenRect | null>(null);
+  const skipCropResyncRef = useRef(false);
+  const [cropScreenRect, setCropScreenRect] = useState<ScreenRect | null>(null);
   const [dragging, setDragging] = useState(false);
   const [compareOriginal, setCompareOriginal] = useState(false);
   const [zoom, setZoom] = useState(1);
@@ -80,12 +101,19 @@ export function Viewport() {
   const isRaw = useEditor(selectIsRaw);
   const rawSettings = useEditor(selectRawSettings);
   const activePhotoId = useEditor((s) => s.activePhotoId);
-  const addPhoto = useEditor((s) => s.addPhoto);
+  const importPhotoFiles = useEditor((s) => s.importPhotoFiles);
+  const reopenPhotosFromDirectory = useEditor((s) => s.reopenPhotosFromDirectory);
+  const sourceDirectoryName = useEditor((s) => s.sourceDirectoryName);
   const setDecodedImage = useEditor((s) => s.setDecodedImage);
   const setGeometry = useEditor((s) => s.setGeometry);
   const setStatus = useEditor((s) => s.setStatus);
   const setDecodeProgress = useEditor((s) => s.setDecodeProgress);
   const photoOrder = useEditor((s) => s.photoOrder);
+  const restoringFiles = useEditor((s) => s.restoringFiles);
+
+  const geometry = adjustments.geometry;
+  const straighten = geometry.straighten;
+  const rotate90 = geometry.rotate90;
 
   const renderFrame = useCallback(
     (preview = cropPreview) => {
@@ -96,9 +124,15 @@ export function Viewport() {
         ? originalPreviewAdjustments(adj)
         : adj;
       pipe.fitToContainer(adj, preview);
-      pipe.render(renderAdj, preview);
+      const rect = cropScreenRectRef.current;
+      const frame = imageFrame;
+      const cropOutRect =
+        preview && rect && frame
+          ? screenRectToOutputRect(rect, frame.dw, frame.dh)
+          : undefined;
+      pipe.render(renderAdj, preview, cropOutRect);
     },
-    [cropPreview],
+    [cropPreview, imageFrame],
   );
 
   const startCompare = useCallback(() => {
@@ -161,10 +195,22 @@ export function Viewport() {
       setImageFrame(null);
       return;
     }
+    const frameSize = cropPreview
+      ? getFullRotatedPreviewSize(image.width, image.height, {
+          ...geometry,
+          straighten,
+          rotate90,
+        })
+      : { width: image.width, height: image.height };
     setImageFrame(
-      fitImageInBox(el.clientWidth, el.clientHeight, image.width, image.height),
+      fitImageInBox(
+        el.clientWidth,
+        el.clientHeight,
+        frameSize.width,
+        frameSize.height,
+      ),
     );
-  }, [image]);
+  }, [image, cropPreview, straighten, rotate90]);
 
   const onComparePointerDown = (e: React.PointerEvent<HTMLButtonElement>) => {
     if (!image || cropPreview) return;
@@ -254,9 +300,41 @@ export function Viewport() {
   }, [image]);
 
   useEffect(() => {
-    if (!cropPreview || !imageFrame) return;
+    if (!cropPreview) return;
     renderFrame(true);
   }, [cropPreview, imageFrame, renderFrame]);
+
+  useEffect(() => {
+    if (!cropPreview || !cropScreenRect) return;
+    renderFrame(true);
+  }, [cropPreview, cropScreenRect, renderFrame]);
+
+  const handleCropScreenRectChange = useCallback(
+    (
+      rect: ScreenRect,
+      sourceCrop?: Pick<Geometry, "cropX" | "cropY" | "cropW" | "cropH">,
+    ) => {
+      skipCropResyncRef.current = true;
+      cropScreenRectRef.current = rect;
+      setCropScreenRect(rect);
+      if (sourceCrop) {
+        setGeometry(sourceCrop);
+        return;
+      }
+      if (!image || !imageFrame) return;
+      const g = selectAdjustments(useEditor.getState()).geometry;
+      const { cropX, cropY, cropW, cropH } = screenRectToSourceCrop(
+        rect,
+        image.width,
+        image.height,
+        rotationRadians(g),
+        imageFrame.dw,
+        imageFrame.dh,
+      );
+      setGeometry({ cropX, cropY, cropW, cropH });
+    },
+    [image, imageFrame, setGeometry],
+  );
 
   useEffect(() => {
     measureImageFrame();
@@ -278,9 +356,100 @@ export function Viewport() {
     measureImageFrame();
   }, [cropPreview, endCompare, resetView, measureImageFrame]);
 
-  useEffect(() => {
-    if (cropPreview) measureImageFrame();
-  }, [cropPreview, image?.width, image?.height, measureImageFrame]);
+  useLayoutEffect(() => {
+    if (!cropPreview || !image || !imageFrame) {
+      cropTrackRef.current = null;
+      cropScreenRectRef.current = null;
+      setCropScreenRect(null);
+      return;
+    }
+
+    const { dw, dh } = imageFrame;
+    const curr = geometry;
+    const prev = cropTrackRef.current;
+
+    const rotationChanged =
+      !!prev &&
+      (prev.geometry.straighten !== curr.straighten ||
+        prev.geometry.rotate90 !== curr.rotate90);
+
+    const frameChanged =
+      !!prev && (prev.frameW !== dw || prev.frameH !== dh);
+
+    const cropChanged =
+      !!prev &&
+      (prev.geometry.cropX !== curr.cropX ||
+        prev.geometry.cropY !== curr.cropY ||
+        prev.geometry.cropW !== curr.cropW ||
+        prev.geometry.cropH !== curr.cropH);
+
+    const lockedRect = cropScreenRectRef.current;
+
+    const fitScreenRect = (rect: ScreenRect) =>
+      curr.aspectLocked
+        ? clampScreenRectPosition(rect, dw, dh)
+        : clampScreenRect(rect, dw, dh);
+
+    if (!prev) {
+      const initial = fitScreenRect(
+        sourceCropToScreenRect(
+          curr,
+          image.width,
+          image.height,
+          rotationRadians(curr),
+          dw,
+          dh,
+        ),
+      );
+      cropScreenRectRef.current = initial;
+      setCropScreenRect(initial);
+    } else if ((rotationChanged || frameChanged) && lockedRect) {
+      let rect = lockedRect;
+      if (frameChanged && prev) {
+        rect = fitScreenRect(
+          scaleScreenRect(lockedRect, prev.frameW, prev.frameH, dw, dh),
+        );
+        cropScreenRectRef.current = rect;
+        setCropScreenRect(rect);
+      }
+      const { cropX, cropY, cropW, cropH } = screenRectToSourceCrop(
+        rect,
+        image.width,
+        image.height,
+        rotationRadians(curr),
+        dw,
+        dh,
+      );
+      const changed =
+        Math.abs(cropX - curr.cropX) > 1e-6 ||
+        Math.abs(cropY - curr.cropY) > 1e-6 ||
+        Math.abs(cropW - curr.cropW) > 1e-6 ||
+        Math.abs(cropH - curr.cropH) > 1e-6;
+      if (changed) {
+        skipCropResyncRef.current = true;
+        setGeometry({ cropX, cropY, cropW, cropH });
+      }
+    } else if (cropChanged && !rotationChanged && !frameChanged) {
+      if (skipCropResyncRef.current) {
+        skipCropResyncRef.current = false;
+      } else {
+        const synced = fitScreenRect(
+          sourceCropToScreenRect(
+            curr,
+            image.width,
+            image.height,
+            rotationRadians(curr),
+            dw,
+            dh,
+          ),
+        );
+        cropScreenRectRef.current = synced;
+        setCropScreenRect(synced);
+      }
+    }
+
+    cropTrackRef.current = { geometry: curr, frameW: dw, frameH: dh };
+  }, [cropPreview, image, imageFrame, geometry, setGeometry]);
 
   useEffect(() => () => endCompare(), [endCompare]);
 
@@ -386,43 +555,11 @@ export function Viewport() {
       cancelled = true;
       setDecodeProgress(null);
     };
-  }, [activePhotoId, setDecodedImage, setStatus, setDecodeProgress]);
+  }, [activePhotoId, sourceFile, setDecodedImage, setStatus, setDecodeProgress]);
 
   const handleFiles = async (files: FileList | null) => {
     if (!files || files.length === 0) return;
-    const list = Array.from(files);
-    for (let i = 0; i < list.length; i++) {
-      const file = list[i];
-      const raw = isRawFile(file);
-      const isLast = i === list.length - 1;
-      const statusLabel = raw
-        ? `Decoding RAW ${file.name} (${i + 1}/${list.length})…`
-        : `Decoding ${file.name} (${i + 1}/${list.length})…`;
-      setStatus(statusLabel);
-      try {
-        const decoded = await decode(
-          file,
-          undefined,
-          createBatchProgressReporter(
-            setDecodeProgress,
-            i,
-            list.length,
-            statusLabel.replace(/…$/, ""),
-          ),
-        );
-        addPhoto(decoded, file, raw, isLast);
-        if (isLast) {
-          setStatus(
-            `${decoded.width} × ${decoded.height} · ${list.length} photo(s)`,
-          );
-        }
-      } catch (err) {
-        setStatus(`Failed ${file.name}: ${(err as Error).message}`);
-        setDecodeProgress(null);
-        break;
-      }
-    }
-    setDecodeProgress(null);
+    await importPhotoFiles(Array.from(files));
   };
 
   return (
@@ -450,7 +587,7 @@ export function Viewport() {
           className={cn(
             "absolute origin-center",
             cropPreview && imageFrame
-              ? "size-full"
+              ? null
               : "inset-0 size-full object-contain object-center",
             !cropPreview && !isPanning && "transition-transform duration-150 ease-out",
             image &&
@@ -579,7 +716,7 @@ export function Viewport() {
             Original
           </div>
         )}
-        {cropPreview && image && imageFrame && (
+        {cropPreview && image && imageFrame && cropScreenRect && (
           <div
             ref={cropOverlayRef}
             className="absolute z-10"
@@ -592,8 +729,9 @@ export function Viewport() {
           >
             <TransformOverlay
               image={image}
-              geometry={adjustments.geometry}
-              onChange={setGeometry}
+              geometry={geometry}
+              screenRect={cropScreenRect}
+              onScreenRectChange={handleCropScreenRectChange}
               containerRef={cropOverlayRef}
             />
           </div>
@@ -608,10 +746,36 @@ export function Viewport() {
         )}
         {!image && photoOrder.length > 0 && (
           <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-3 p-6 text-center text-base text-muted-foreground">
-            <p className="m-0">Re-open photos to continue editing</p>
-            <p className="m-0 text-[11px] text-muted-foreground">
-              Settings are saved — use Open… and select the same files
-            </p>
+            {restoringFiles ? (
+              <>
+                <p className="m-0">Restoring photos…</p>
+                <p className="m-0 text-[11px] text-muted-foreground">
+                  Loading saved files from this browser
+                </p>
+              </>
+            ) : (
+              <>
+                <p className="m-0">Photos need to be re-opened</p>
+                <p className="m-0 text-[11px] text-muted-foreground">
+                  {supportsDirectoryPicker()
+                    ? sourceDirectoryName
+                      ? `Click Re-open to load from ${sourceDirectoryName}`
+                      : "Click Re-open once to link your photo folder"
+                    : "Use Open… and select the same files"}
+                </p>
+                {supportsDirectoryPicker() && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="pointer-events-auto border-primary/40 text-primary"
+                    onClick={() => reopenPhotosFromDirectory()}
+                  >
+                    Re-open
+                    {sourceDirectoryName ? ` · ${sourceDirectoryName}` : ""}
+                  </Button>
+                )}
+              </>
+            )}
           </div>
         )}
         <input

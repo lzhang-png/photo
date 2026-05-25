@@ -2,7 +2,13 @@ import { Adjustments } from "./adjustments";
 import { wbMatrix } from "./colorMath";
 import { buildCurveLUT } from "./curve";
 import { FILM_SHADER_INDEX } from "./filmStocks";
-import { getOutputSize, rotationRadians } from "./geometry";
+import {
+  getFullRotatedPreviewSize,
+  getOutputSize,
+  rotationRadians,
+  sourceCropToOutputRect,
+  type OutputRect,
+} from "./geometry";
 import { FRAG_SRC, VERT_SRC } from "./shaders";
 
 /**
@@ -95,6 +101,8 @@ export class Pipeline {
       "u_luminanceNoise",
       "u_colorNoise",
       "u_filmGrain",
+      "u_filmGrainSize",
+      "u_filmGrainDensity",
       "u_vintage",
       "u_texelSize",
       "u_flipY",
@@ -102,8 +110,10 @@ export class Pipeline {
       "u_inputLinear",
       "u_crop",
       "u_cropSize",
+      "u_outSize",
       "u_angle",
       "u_cropPreview",
+      "u_cropOutRect",
     ]) {
       uniforms[name] = gl.getUniformLocation(program, name);
     }
@@ -184,7 +194,13 @@ export class Pipeline {
     const frame =
       adj && !cropPreview
         ? getOutputSize(image.width, image.height, adj.geometry)
-        : { width: image.width, height: image.height };
+        : adj && cropPreview
+          ? getFullRotatedPreviewSize(
+              image.width,
+              image.height,
+              adj.geometry,
+            )
+          : { width: image.width, height: image.height };
     const scale = Math.min(cw / frame.width, ch / frame.height);
     const tw = Math.max(1, Math.floor(frame.width * scale * devicePixelRatio));
     const th = Math.max(1, Math.floor(frame.height * scale * devicePixelRatio));
@@ -202,7 +218,7 @@ export class Pipeline {
     gl.viewport(0, 0, width, height);
   }
 
-  render(adj: Adjustments, cropPreview = false) {
+  render(adj: Adjustments, cropPreview = false, cropOutRect?: OutputRect) {
     const { gl, uniforms, curveTex, image } = this.state;
     if (!image) {
       gl.clearColor(0, 0, 0, 0);
@@ -211,8 +227,15 @@ export class Pipeline {
     }
 
     const g = adj.geometry;
-    const cropSizeX = Math.max(1, g.cropW * image.width);
-    const cropSizeY = Math.max(1, g.cropH * image.height);
+    const cropSizeX = cropPreview
+      ? image.width
+      : Math.max(1, g.cropW * image.width);
+    const cropSizeY = cropPreview
+      ? image.height
+      : Math.max(1, g.cropH * image.height);
+    const outSize = cropPreview
+      ? getFullRotatedPreviewSize(image.width, image.height, g)
+      : getOutputSize(image.width, image.height, g);
     gl.uniform4f(
       uniforms.u_crop!,
       g.cropX,
@@ -221,8 +244,27 @@ export class Pipeline {
       g.cropH,
     );
     gl.uniform2f(uniforms.u_cropSize!, cropSizeX, cropSizeY);
+    gl.uniform2f(uniforms.u_outSize!, outSize.width, outSize.height);
     gl.uniform1f(uniforms.u_angle!, rotationRadians(g));
     gl.uniform1f(uniforms.u_cropPreview!, cropPreview ? 1.0 : 0.0);
+    const outRect =
+      cropPreview && cropOutRect
+        ? cropOutRect
+        : cropPreview
+          ? sourceCropToOutputRect(
+              g,
+              image.width,
+              image.height,
+              rotationRadians(g),
+            )
+          : { minU: 0, minV: 0, maxU: 1, maxV: 1 };
+    gl.uniform4f(
+      uniforms.u_cropOutRect!,
+      outRect.minU,
+      outRect.minV,
+      outRect.maxU,
+      outRect.maxV,
+    );
 
     // Upload curve LUT as a 256x1 luminance texture.
     const lut = buildCurveLUT(adj.curve);
@@ -259,6 +301,8 @@ export class Pipeline {
     gl.uniform1f(uniforms.u_luminanceNoise!, adj.luminanceNoise);
     gl.uniform1f(uniforms.u_colorNoise!, adj.colorNoise);
     gl.uniform1f(uniforms.u_filmGrain!, adj.filmGrain);
+    gl.uniform1f(uniforms.u_filmGrainSize!, adj.filmGrainSize);
+    gl.uniform1f(uniforms.u_filmGrainDensity!, adj.filmGrainDensity);
     gl.uniform1f(uniforms.u_vintage!, adj.vintage);
     gl.uniform2f(uniforms.u_texelSize!, 1 / image.width, 1 / image.height);
     gl.uniform1f(uniforms.u_flipY!, image.flipY ? 1.0 : 0.0);

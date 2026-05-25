@@ -23,6 +23,8 @@ export type Adjustments = {
   luminanceNoise: number;
   colorNoise: number;
   filmGrain: number;
+  filmGrainSize: number;
+  filmGrainDensity: number;
   vintage: number;
   film: FilmId;
   geometry: Geometry;
@@ -49,6 +51,8 @@ export function extractEditSettings(adj: Adjustments): EditSettings {
     luminanceNoise: adj.luminanceNoise,
     colorNoise: adj.colorNoise,
     filmGrain: adj.filmGrain,
+    filmGrainSize: adj.filmGrainSize,
+    filmGrainDensity: adj.filmGrainDensity,
     vintage: adj.vintage,
     film: adj.film,
     curve: adj.curve.map((p) => ({ ...p })),
@@ -83,6 +87,8 @@ export const DEFAULT_ADJUSTMENTS: Adjustments = {
   luminanceNoise: 0,
   colorNoise: 0,
   filmGrain: 0,
+  filmGrainSize: 0.5,
+  filmGrainDensity: 0.5,
   vintage: 0,
   film: "none",
   geometry: cloneGeometry(DEFAULT_GEOMETRY),
@@ -131,5 +137,7 @@ export const DETAIL_SLIDERS: SliderSpec[] = [
 
 export const EFFECTS_SLIDERS: SliderSpec[] = [
   { key: "filmGrain", label: "Film Grain", min: 0, max: 1, step: 0.01 },
+  { key: "filmGrainSize", label: "Grain Size", min: 0, max: 1, step: 0.01 },
+  { key: "filmGrainDensity", label: "Grain Density", min: 0, max: 1, step: 0.01 },
   { key: "vintage", label: "Vintage", min: 0, max: 1, step: 0.01 },
 ];

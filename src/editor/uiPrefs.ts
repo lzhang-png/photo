@@ -7,11 +7,15 @@ export const MAX_SIDEBAR_WIDTH = 560;
 export type UiPrefs = {
   showHistogram: boolean;
   sidebarWidth: number;
+  collapsedSections: string[];
+  sourceDirectoryName: string | null;
 };
 
 const DEFAULT_PREFS: UiPrefs = {
   showHistogram: false,
   sidebarWidth: DEFAULT_SIDEBAR_WIDTH,
+  collapsedSections: [],
+  sourceDirectoryName: null,
 };
 
 function clampSidebarWidth(width: number): number {
@@ -29,6 +33,13 @@ export function loadUiPrefs(): UiPrefs {
       ...DEFAULT_PREFS,
       ...data,
       sidebarWidth: clampSidebarWidth(data.sidebarWidth ?? DEFAULT_SIDEBAR_WIDTH),
+      collapsedSections: Array.isArray(data.collapsedSections)
+        ? data.collapsedSections.filter((id): id is string => typeof id === "string")
+        : DEFAULT_PREFS.collapsedSections,
+      sourceDirectoryName:
+        typeof data.sourceDirectoryName === "string"
+          ? data.sourceDirectoryName
+          : DEFAULT_PREFS.sourceDirectoryName,
     };
   } catch {
     return { ...DEFAULT_PREFS };
