@@ -90,6 +90,13 @@ export class Pipeline {
       "u_wbMatrix",
       "u_vibrance",
       "u_saturation",
+      "u_definition",
+      "u_sharpen",
+      "u_luminanceNoise",
+      "u_colorNoise",
+      "u_filmGrain",
+      "u_vintage",
+      "u_texelSize",
       "u_flipY",
       "u_film",
       "u_inputLinear",
@@ -247,6 +254,13 @@ export class Pipeline {
     );
     gl.uniform1f(uniforms.u_vibrance!, adj.vibrance);
     gl.uniform1f(uniforms.u_saturation!, adj.saturation);
+    gl.uniform1f(uniforms.u_definition!, adj.definition);
+    gl.uniform1f(uniforms.u_sharpen!, adj.sharpen);
+    gl.uniform1f(uniforms.u_luminanceNoise!, adj.luminanceNoise);
+    gl.uniform1f(uniforms.u_colorNoise!, adj.colorNoise);
+    gl.uniform1f(uniforms.u_filmGrain!, adj.filmGrain);
+    gl.uniform1f(uniforms.u_vintage!, adj.vintage);
+    gl.uniform2f(uniforms.u_texelSize!, 1 / image.width, 1 / image.height);
     gl.uniform1f(uniforms.u_flipY!, image.flipY ? 1.0 : 0.0);
     gl.uniform1f(uniforms.u_film!, FILM_SHADER_INDEX[adj.film]);
     gl.uniform1f(

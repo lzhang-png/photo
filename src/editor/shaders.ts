@@ -25,6 +25,13 @@ uniform float u_blacks;
 uniform mat3  u_wbMatrix;     // Bradford CAT, sRGB-linear -> sRGB-linear
 uniform float u_vibrance;
 uniform float u_saturation;
+uniform float u_definition;
+uniform float u_sharpen;
+uniform float u_luminanceNoise;
+uniform float u_colorNoise;
+uniform float u_filmGrain;
+uniform float u_vintage;
+uniform vec2 u_texelSize;     // 1 / source image size in pixels
 uniform float u_flipY;
 uniform float u_film;
 uniform float u_inputLinear;  // 1.0 if image texture is already linear (RAW), 0.0 if sRGB-encoded
@@ -291,6 +298,39 @@ vec3 applyFilm(vec3 c, vec2 uv) {
   return clamp(col, 0.0, 1.0);
 }
 
+// Faded warm look with lifted shadows and frame vignette (outUV = display space).
+vec3 applyVintage(vec3 c, vec2 outUV) {
+  if (u_vintage < 1e-5) return c;
+
+  float t = u_vintage;
+  float l = lumaSrgb(c);
+
+  c = (c - 0.5) * mix(1.0, 0.86, t) + mix(0.5, 0.53, t);
+  c = mix(c, vec3(l) + vec3(0.07, 0.045, 0.0), t * (1.0 - smoothstep(0.0, 0.5, l)) * 0.4);
+  c.r += 0.045 * t;
+  c.g += 0.018 * t;
+  c.b -= 0.035 * t;
+  c = mix(vec3(l), c, mix(1.0, 0.8, t));
+
+  vec2 d = outUV - 0.5;
+  c *= 1.0 - smoothstep(0.3, 0.82, dot(d, d)) * t * 0.38;
+
+  return clamp(c, 0.0, 1.0);
+}
+
+// Luminance-weighted grain in source UV space (moves with image content).
+vec3 applyFilmGrain(vec3 c, vec2 srcUV) {
+  if (u_filmGrain < 1e-5) return c;
+
+  float l = lumaSrgb(c);
+  float mid = 4.0 * l * (1.0 - l);
+  float g1 = hash21(srcUV * 2400.0) - 0.5;
+  float g2 = hash21(srcUV * 1800.0 + vec2(31.0, 71.0)) - 0.5;
+  float grain = (g1 * 0.65 + g2 * 0.35) * u_filmGrain * 0.07 * (0.3 + mid);
+  c += vec3(grain);
+  return clamp(c, 0.0, 1.0);
+}
+
 vec2 mapOutputUV(vec2 uv) {
   if (u_cropPreview > 0.5) {
     return vec2(uv.x, mix(uv.y, 1.0 - uv.y, u_flipY));
@@ -319,6 +359,72 @@ vec2 mapOutputUV(vec2 uv) {
   // cropY is stored from the visual top; texture v=0 is also the visual top.
   texUV.y = u_crop.y + (1.0 - local.y / cropSize.y) * u_crop.w;
   return texUV;
+}
+
+// Decode a source sample to linear-light sRGB with white balance + exposure.
+vec3 developSample(vec3 sampled) {
+  vec3 c = (u_inputLinear > 0.5) ? sampled : srgb_to_linear(sampled);
+  c = u_wbMatrix * c;
+  c *= pow(2.0, u_exposure);
+  return c;
+}
+
+float sampleDevelopLuma(vec2 suv) {
+  return luma_linear(developSample(texture(u_image, suv).rgb));
+}
+
+float neighborLumaBlur(vec2 uv, vec2 d) {
+  return (
+    sampleDevelopLuma(uv + vec2( d.x,  0.0)) +
+    sampleDevelopLuma(uv + vec2(-d.x,  0.0)) +
+    sampleDevelopLuma(uv + vec2( 0.0,  d.y)) +
+    sampleDevelopLuma(uv + vec2( 0.0, -d.y))
+  ) * 0.25;
+}
+
+vec2 neighborChromaBlur(vec2 uv, vec2 d) {
+  vec2 sum = vec2(0.0);
+  sum += linear_to_oklab(developSample(texture(u_image, uv + vec2( d.x,  0.0)).rgb)).yz;
+  sum += linear_to_oklab(developSample(texture(u_image, uv + vec2(-d.x,  0.0)).rgb)).yz;
+  sum += linear_to_oklab(developSample(texture(u_image, uv + vec2( 0.0,  d.y)).rgb)).yz;
+  sum += linear_to_oklab(developSample(texture(u_image, uv + vec2( 0.0, -d.y)).rgb)).yz;
+  return sum * 0.25;
+}
+
+vec3 applyLuminanceNoise(vec3 c, vec2 uv, float Y) {
+  if (u_luminanceNoise < 1e-5) return c;
+  float Yblur = neighborLumaBlur(uv, u_texelSize);
+  float Y2 = mix(Y, Yblur, u_luminanceNoise * 0.85);
+  return c * (Y2 / max(Y, 1e-5));
+}
+
+vec3 applyColorNoise(vec3 c, vec2 uv) {
+  if (u_colorNoise < 1e-5) return c;
+  vec3 lab = linear_to_oklab(c);
+  vec2 abBlur = neighborChromaBlur(uv, u_texelSize);
+  lab.yz = mix(lab.yz, abBlur, u_colorNoise * 0.8);
+  return oklab_to_linear(lab);
+}
+
+// Local contrast (clarity/definition) via luminance high-pass, midtone-weighted.
+vec3 applyDefinition(vec3 c, vec2 uv, float Y) {
+  if (abs(u_definition) < 1e-5) return c;
+
+  float Yn = neighborLumaBlur(uv, u_texelSize);
+  float mid = 4.0 * Y * (1.0 - Y);
+  float Y2 = Y + u_definition * 2.5 * mid * (Y - Yn);
+  return c * (Y2 / max(Y, 1e-5));
+}
+
+// Unsharp mask on luminance — edge acutance.
+vec3 applySharpen(vec3 c, vec2 uv, float Y) {
+  if (u_sharpen < 1e-5) return c;
+
+  float Yn = neighborLumaBlur(uv, u_texelSize);
+  float edge = abs(Y - Yn) / max(Y, 1e-5);
+  float mask = smoothstep(0.01, 0.12, edge);
+  float Y2 = Y + u_sharpen * 3.5 * mask * (Y - Yn);
+  return c * (Y2 / max(Y, 1e-5));
 }
 
 void main() {
@@ -404,11 +510,25 @@ void main() {
   lab.yz *= satFactor * vibFactor;
   c = oklab_to_linear(lab);
 
+  // -------- 8b. Detail: NR → definition → sharpen --------
+  float Ydetail = max(luma_linear(c), 1e-5);
+  c = applyLuminanceNoise(c, uv, Ydetail);
+  Ydetail = max(luma_linear(c), 1e-5);
+  c = applyColorNoise(c, uv);
+  Ydetail = max(luma_linear(c), 1e-5);
+  c = applyDefinition(c, uv, Ydetail);
+  Ydetail = max(luma_linear(c), 1e-5);
+  c = applySharpen(c, uv, Ydetail);
+
   // -------- 9. Encode to sRGB display --------
   vec3 outSrgb = clamp(linear_to_srgb(max(c, 0.0)), 0.0, 1.0);
 
   // -------- 10. Film stocks (operate on sRGB display values) --------
   outSrgb = applyFilm(outSrgb, uv);
+
+  // -------- 11. Effects: vintage then grain --------
+  outSrgb = applyVintage(outSrgb, v_uv);
+  outSrgb = applyFilmGrain(outSrgb, uv);
 
   fragColor = vec4(outSrgb, 1.0);
 }

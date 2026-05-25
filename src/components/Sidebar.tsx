@@ -1,4 +1,4 @@
-import { RotateCcw, RotateCw } from "lucide-react";
+import { ClipboardCopy, ClipboardPaste, RotateCcw, RotateCw } from "lucide-react";
 import { AdjustmentSlider } from "@/components/AdjustmentSlider";
 import { InfoTooltip } from "@/components/InfoTooltip";
 import { SidebarSection } from "@/components/SidebarSection";
@@ -17,6 +17,8 @@ import { Slider } from "@/components/ui/slider";
 import { Toggle } from "@/components/ui/toggle";
 import {
   COLOR_SLIDERS,
+  DETAIL_SLIDERS,
+  EFFECTS_SLIDERS,
   TONE_SLIDERS,
 } from "../editor/adjustments";
 import {
@@ -58,15 +60,15 @@ export function Sidebar() {
   const image = useEditor(selectImage);
   const isRaw = useEditor(selectIsRaw);
   const raw = useEditor(selectRawSettings);
-  const photoCount = useEditor((s) => s.photoOrder.length);
   const cropEditing = useEditor((s) => s.cropEditing);
   const setAdjustment = useEditor((s) => s.setAdjustment);
   const setGeometry = useEditor((s) => s.setGeometry);
   const setCropEditing = useEditor((s) => s.setCropEditing);
   const setRawSetting = useEditor((s) => s.setRawSetting);
   const resetRawSettings = useEditor((s) => s.resetRawSettings);
-  const applyAdjustmentsToAll = useEditor((s) => s.applyAdjustmentsToAll);
-  const applyRawSettingsToAll = useEditor((s) => s.applyRawSettingsToAll);
+  const copyEditSettings = useEditor((s) => s.copyEditSettings);
+  const pasteEditSettings = useEditor((s) => s.pasteEditSettings);
+  const editSettingsClipboard = useEditor((s) => s.editSettingsClipboard);
   const geom = adj.geometry;
   const disabled = !image;
 
@@ -74,33 +76,33 @@ export function Sidebar() {
     <aside className="flex h-full min-h-0 flex-col overflow-hidden border-l border-border bg-sidebar">
       <ScrollArea className="min-h-0 flex-1">
         <div className="pb-4">
-          {photoCount > 1 && (
-            <SidebarSection
-              title="Bulk Edit"
-              hint="Copies the current photo's settings to every photo in the catalog. Edits are saved automatically."
-            >
-              <div className="space-y-2.5">
-                <Button
-                  type="button"
-                  variant="outline"
-                  className="h-9 w-full"
-                  onClick={applyAdjustmentsToAll}
-                >
-                  Apply adjustments to all
-                </Button>
-                {isRaw && (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    className="h-9 w-full"
-                    onClick={applyRawSettingsToAll}
-                  >
-                    Apply RAW settings to all RAW
-                  </Button>
-                )}
-              </div>
-            </SidebarSection>
-          )}
+          <SidebarSection
+            title="Edit Settings"
+            hint="Copy tone, color, detail, effects, film, and curve from this photo. Crop, rotation, and straighten are not included."
+          >
+            <div className="grid grid-cols-2 gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                className="h-9"
+                disabled={disabled}
+                onClick={copyEditSettings}
+              >
+                <ClipboardCopy className="size-3.5" />
+                Copy
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                className="h-9"
+                disabled={disabled || !editSettingsClipboard}
+                onClick={pasteEditSettings}
+              >
+                <ClipboardPaste className="size-3.5" />
+                Paste
+              </Button>
+            </div>
+          </SidebarSection>
 
           {isRaw && (
             <SidebarSection
@@ -345,6 +347,23 @@ export function Sidebar() {
           </SidebarSection>
 
           <SidebarSection
+            title="Detail"
+            hint="Definition and sharpening enhance texture. Noise sliders smooth grain after develop — separate from RAW Develop denoise."
+          >
+            <div className="space-y-5">
+              {DETAIL_SLIDERS.map((s) => (
+                <AdjustmentSlider
+                  key={s.key}
+                  spec={s}
+                  value={adj[s.key]}
+                  disabled={disabled}
+                  onChange={(v) => setAdjustment(s.key, v)}
+                />
+              ))}
+            </div>
+          </SidebarSection>
+
+          <SidebarSection
             title="Film"
             hint={
               adj.film !== "none"
@@ -368,6 +387,23 @@ export function Sidebar() {
                 >
                   {stock.label}
                 </Toggle>
+              ))}
+            </div>
+          </SidebarSection>
+
+          <SidebarSection
+            title="Effects"
+            hint="Creative overlays — grain adds texture; vintage fades tones, warms color, and adds a soft vignette."
+          >
+            <div className="space-y-5">
+              {EFFECTS_SLIDERS.map((s) => (
+                <AdjustmentSlider
+                  key={s.key}
+                  spec={s}
+                  value={adj[s.key]}
+                  disabled={disabled}
+                  onChange={(v) => setAdjustment(s.key, v)}
+                />
               ))}
             </div>
           </SidebarSection>

@@ -15,7 +15,6 @@ import {
   useEditor,
 } from "../state/store";
 import { cn } from "@/lib/utils";
-import { Filmstrip } from "./Filmstrip";
 import { Histogram } from "./Histogram";
 import { TransformOverlay } from "./TransformOverlay";
 
@@ -427,11 +426,10 @@ export function Viewport() {
   };
 
   return (
-    <div className="flex min-h-0 flex-col overflow-hidden">
-      <div
-        ref={viewportRef}
-        className={cn(
-          "group/viewport relative min-h-0 flex-1 overflow-hidden bg-[repeating-conic-gradient(#1d1d1d_0%_25%,#161616_0%_50%)] bg-size-[24px_24px]",
+    <div
+      ref={viewportRef}
+      className={cn(
+        "group/viewport relative h-full min-h-0 overflow-hidden bg-[repeating-conic-gradient(#1d1d1d_0%_25%,#161616_0%_50%)] bg-size-[24px_24px]",
           dragging &&
             "after:pointer-events-none after:absolute after:inset-2 after:rounded-md after:border-2 after:border-dashed after:border-primary",
           cropPreview && "[&_canvas]:pointer-events-none",
@@ -628,7 +626,5 @@ export function Viewport() {
           }}
         />
       </div>
-      <Filmstrip />
-    </div>
   );
 }

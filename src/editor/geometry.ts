@@ -51,8 +51,9 @@ export function normalizeGeometry(g: Geometry): Geometry {
   return { cropX, cropY, cropW, cropH, rotate90, straighten };
 }
 
+/** Radians applied in the shader (negated so CW UI matches on-screen canvas coords). */
 export function rotationRadians(g: Geometry): number {
-  return (
+  return -(
     (g.rotate90 * Math.PI) / 2 + (g.straighten * Math.PI) / 180
   );
 }

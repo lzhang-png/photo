@@ -15,8 +15,8 @@ export function Filmstrip() {
   if (photoOrder.length === 0) return null;
 
   return (
-    <ScrollArea className="shrink-0 border-t border-border bg-sidebar">
-      <div className="flex items-center gap-2 p-2.5">
+    <ScrollArea className="h-full w-[76px] shrink-0 border-r border-border bg-sidebar">
+      <div className="flex flex-col items-center gap-1.5 p-1.5">
         {photoOrder.map((id) => {
           const photo = photos[id];
           if (!photo) return null;
@@ -27,7 +27,7 @@ export function Filmstrip() {
               <button
                 type="button"
                 className={cn(
-                  "relative size-[84px] overflow-hidden rounded-md border-2 bg-muted transition-colors",
+                  "relative size-16 overflow-hidden rounded-md border-2 bg-muted transition-colors",
                   isActive ? "border-primary" : "border-transparent hover:border-border",
                   needsFile && "opacity-65",
                 )}
@@ -47,7 +47,7 @@ export function Filmstrip() {
                 {needsFile && (
                   <Badge
                     variant="secondary"
-                    className="absolute right-1 bottom-1 left-1 h-5 justify-center px-1 text-[10px] uppercase"
+                    className="absolute right-0.5 bottom-0.5 left-0.5 h-4 justify-center px-0.5 text-[8px] uppercase"
                   >
                     reopen
                   </Badge>
@@ -58,7 +58,7 @@ export function Filmstrip() {
                 variant="secondary"
                 size="icon-sm"
                 className={cn(
-                  "absolute top-1.5 right-1.5 transition-opacity",
+                  "absolute top-1 right-1 size-5 transition-opacity",
                   isActive ? "opacity-100" : "opacity-0 group-hover:opacity-100",
                 )}
                 title="Remove from catalog"
@@ -67,13 +67,13 @@ export function Filmstrip() {
                   removePhoto(id);
                 }}
               >
-                <X className="size-4" />
+                <X className="size-3" />
               </Button>
             </div>
           );
         })}
       </div>
-      <ScrollBar orientation="horizontal" />
+      <ScrollBar orientation="vertical" />
     </ScrollArea>
   );
 }

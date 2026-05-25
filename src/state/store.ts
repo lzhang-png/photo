@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { Adjustments, DEFAULT_ADJUSTMENTS } from "../editor/adjustments";
+import { Adjustments, DEFAULT_ADJUSTMENTS, applyEditSettings, extractEditSettings, type EditSettings } from "../editor/adjustments";
 import {
   cloneAdjustments,
   cloneRawSettings,
@@ -43,6 +43,7 @@ type EditorState = {
   decodeProgress: DecodeProgress | null;
   cropEditing: boolean;
   showHistogram: boolean;
+  editSettingsClipboard: EditSettings | null;
 
   addPhoto: (
     image: DecodedImage,
@@ -64,8 +65,8 @@ type EditorState = {
   ) => void;
   resetAdjustments: () => void;
   resetRawSettings: () => void;
-  applyAdjustmentsToAll: () => void;
-  applyRawSettingsToAll: () => void;
+  copyEditSettings: () => void;
+  pasteEditSettings: () => void;
   setStatus: (msg: string | null) => void;
   setDecodeProgress: (progress: DecodeProgress | null) => void;
   setCropEditing: (editing: boolean) => void;
@@ -172,6 +173,7 @@ export const useEditor = create<EditorState>((set, get) => ({
   decodeProgress: null,
   cropEditing: false,
   showHistogram: initialPrefs.showHistogram,
+  editSettingsClipboard: null,
 
   addPhoto: (image, file, isRaw, makeActive = true) => {
     const fingerprint = fileFingerprint(file);
@@ -304,34 +306,24 @@ export const useEditor = create<EditorState>((set, get) => ({
     schedulePersist(get);
   },
 
-  applyAdjustmentsToAll: () => {
+  copyEditSettings: () => {
     const active = getActive(get());
     if (!active) return;
-    const adj = cloneAdjustments(active.adjustments);
-    set((s) => ({
-      photos: Object.fromEntries(
-        Object.entries(s.photos).map(([id, p]) => [
-          id,
-          { ...p, adjustments: cloneAdjustments(adj) },
-        ]),
-      ),
-    }));
-    schedulePersist(get);
+    set({ editSettingsClipboard: extractEditSettings(active.adjustments) });
+    set({ status: "Copied edit settings" });
   },
 
-  applyRawSettingsToAll: () => {
+  pasteEditSettings: () => {
+    const clipboard = get().editSettingsClipboard;
     const active = getActive(get());
-    if (!active) return;
-    const raw = cloneRawSettings(active.rawSettings);
-    set((s) => ({
-      photos: Object.fromEntries(
-        Object.entries(s.photos).map(([id, p]) => [
-          id,
-          p.isRaw ? { ...p, rawSettings: cloneRawSettings(raw) } : p,
-        ]),
-      ),
-    }));
+    if (!clipboard || !active) return;
+    set((s) =>
+      updateActive(s, {
+        adjustments: applyEditSettings(active.adjustments, clipboard),
+      }),
+    );
     schedulePersist(get);
+    set({ status: "Pasted edit settings" });
   },
 
   setStatus: (status) => set({ status }),
@@ -352,7 +344,13 @@ export const useEditor = create<EditorState>((set, get) => ({
   },
 
   clearCatalog: () => {
-    set({ photos: {}, photoOrder: [], activePhotoId: null, cropEditing: false });
+    set({
+      photos: {},
+      photoOrder: [],
+      activePhotoId: null,
+      cropEditing: false,
+      editSettingsClipboard: null,
+    });
     localStorage.removeItem(STORAGE_KEY);
   },
 }));

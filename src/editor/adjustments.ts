@@ -18,10 +18,54 @@ export type Adjustments = {
   tint: number;
   vibrance: number;
   saturation: number;
+  definition: number;
+  sharpen: number;
+  luminanceNoise: number;
+  colorNoise: number;
+  filmGrain: number;
+  vintage: number;
   film: FilmId;
   geometry: Geometry;
   curve: CurvePoint[];
 };
+
+/** Tone, color, film, and curve — everything except crop/rotate/straighten. */
+export type EditSettings = Omit<Adjustments, "geometry">;
+
+export function extractEditSettings(adj: Adjustments): EditSettings {
+  return {
+    exposure: adj.exposure,
+    contrast: adj.contrast,
+    highlights: adj.highlights,
+    shadows: adj.shadows,
+    whites: adj.whites,
+    blacks: adj.blacks,
+    temperature: adj.temperature,
+    tint: adj.tint,
+    vibrance: adj.vibrance,
+    saturation: adj.saturation,
+    definition: adj.definition,
+    sharpen: adj.sharpen,
+    luminanceNoise: adj.luminanceNoise,
+    colorNoise: adj.colorNoise,
+    filmGrain: adj.filmGrain,
+    vintage: adj.vintage,
+    film: adj.film,
+    curve: adj.curve.map((p) => ({ ...p })),
+  };
+}
+
+export function applyEditSettings(
+  adj: Adjustments,
+  edits: EditSettings,
+): Adjustments {
+  return {
+    ...adj,
+    ...edits,
+    geometry: cloneGeometry(adj.geometry),
+    curve: edits.curve.map((p) => ({ ...p })),
+  };
+}
 
 export const DEFAULT_ADJUSTMENTS: Adjustments = {
   exposure: 0,
@@ -34,6 +78,12 @@ export const DEFAULT_ADJUSTMENTS: Adjustments = {
   tint: 0,
   vibrance: 0,
   saturation: 0,
+  definition: 0,
+  sharpen: 0,
+  luminanceNoise: 0,
+  colorNoise: 0,
+  filmGrain: 0,
+  vintage: 0,
   film: "none",
   geometry: cloneGeometry(DEFAULT_GEOMETRY),
   curve: DEFAULT_CURVE.map((p) => ({ ...p })),
@@ -70,4 +120,16 @@ export const COLOR_SLIDERS: SliderSpec[] = [
   { key: "tint", label: "Tint", min: -1, max: 1, step: 0.01 },
   { key: "vibrance", label: "Vibrance", min: -1, max: 1, step: 0.01 },
   { key: "saturation", label: "Saturation", min: -1, max: 1, step: 0.01 },
+];
+
+export const DETAIL_SLIDERS: SliderSpec[] = [
+  { key: "definition", label: "Definition", min: -1, max: 1, step: 0.01 },
+  { key: "sharpen", label: "Sharpening", min: 0, max: 1, step: 0.01 },
+  { key: "luminanceNoise", label: "Luminance Noise", min: 0, max: 1, step: 0.01 },
+  { key: "colorNoise", label: "Color Noise", min: 0, max: 1, step: 0.01 },
+];
+
+export const EFFECTS_SLIDERS: SliderSpec[] = [
+  { key: "filmGrain", label: "Film Grain", min: 0, max: 1, step: 0.01 },
+  { key: "vintage", label: "Vintage", min: 0, max: 1, step: 0.01 },
 ];

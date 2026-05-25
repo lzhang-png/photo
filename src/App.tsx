@@ -8,6 +8,7 @@ import {
 } from "./state/store";
 import { StatusPill } from "./components/StatusPill";
 import { Viewport } from "./components/Viewport";
+import { Filmstrip } from "./components/Filmstrip";
 import { Sidebar } from "./components/Sidebar";
 import { SidebarResizeHandle } from "./components/SidebarResizeHandle";
 import {
@@ -196,7 +197,12 @@ export function App() {
           Export JPEG
         </Button>
       </header>
-      <Viewport />
+      <div className="flex min-h-0 min-w-0 overflow-hidden">
+        <Filmstrip />
+        <div className="min-h-0 min-w-0 flex-1">
+          <Viewport />
+        </div>
+      </div>
       <div className="relative flex h-full min-h-0 flex-col">
         <SidebarResizeHandle
           width={sidebarWidth}
