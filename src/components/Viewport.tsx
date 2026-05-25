@@ -11,6 +11,12 @@ import {
   scheduleTransformRender,
   syncSessionAfterFrame,
 } from "../editor/transformSession";
+import { getOutputSize } from "../editor/geometry";
+import {
+  layoutSocialTemplatePreview,
+  socialTemplateBackgroundCss,
+  type SocialTemplateLayout,
+} from "../editor/socialTemplate";
 import { type ImageFrame } from "../editor/viewLayout";
 import { Button } from "@/components/ui/button";
 import { decode } from "../editor/decode";
@@ -22,6 +28,7 @@ import {
   selectImage,
   selectIsRaw,
   selectRawSettings,
+  selectSocialTemplate,
   selectSourceFile,
   useEditor,
 } from "../state/store";
@@ -33,6 +40,7 @@ const RAW_REDECODE_MS = 400;
 const ZOOM_MIN = 1;
 const ZOOM_MAX = 4;
 const ZOOM_STEP = 1.25;
+const WHEEL_ZOOM_SENSITIVITY = 0.002;
 const COMPARE_CLICK_MS = 2000;
 const COMPARE_HOLD_THRESHOLD_MS = 250;
 
@@ -54,6 +62,35 @@ function clampPan(
   return {
     x: Math.max(-maxX, Math.min(maxX, pan.x)),
     y: Math.max(-maxY, Math.min(maxY, pan.y)),
+  };
+}
+
+function zoomAtPoint(
+  zoom: number,
+  pan: Pan,
+  nextZoom: number,
+  focalX: number,
+  focalY: number,
+  viewportW: number,
+  viewportH: number,
+): { zoom: number; pan: Pan } {
+  if (nextZoom <= ZOOM_MIN + 1e-6) {
+    return { zoom: ZOOM_MIN, pan: { x: 0, y: 0 } };
+  }
+  const scale = nextZoom / zoom;
+  const cx = focalX - viewportW / 2;
+  const cy = focalY - viewportH / 2;
+  return {
+    zoom: nextZoom,
+    pan: clampPan(
+      {
+        x: pan.x * scale + cx * (1 - scale),
+        y: pan.y * scale + cy * (1 - scale),
+      },
+      nextZoom,
+      viewportW,
+      viewportH,
+    ),
   };
 }
 
@@ -80,16 +117,24 @@ export function Viewport() {
   });
   const imageFrameRef = useRef<ImageFrame | null>(null);
   const cropWasActiveRef = useRef(false);
+  const zoomRef = useRef(1);
+  const panRef = useRef<Pan>({ x: 0, y: 0 });
+  const wheelZoomTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [dragging, setDragging] = useState(false);
   const [compareOriginal, setCompareOriginal] = useState(false);
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState<Pan>({ x: 0, y: 0 });
   const [isPanning, setIsPanning] = useState(false);
+  const [wheelZooming, setWheelZooming] = useState(false);
   const [imageFrame, setImageFrame] = useState<ImageFrame | null>(null);
+  const [socialLayout, setSocialLayout] = useState<SocialTemplateLayout | null>(
+    null,
+  );
   const [histogramTick, setHistogramTick] = useState(0);
 
   const cropPreview = useEditor((s) => s.cropEditing);
+  const socialTemplate = useEditor(selectSocialTemplate);
   const showHistogram = useEditor((s) => s.showHistogram);
   const toggleHistogram = useEditor((s) => s.toggleHistogram);
   const geometry = useEditor((s) =>
@@ -111,6 +156,55 @@ export function Viewport() {
   const photoOrder = useEditor((s) => s.photoOrder);
   const restoringFiles = useEditor((s) => s.restoringFiles);
 
+  useEffect(() => {
+    zoomRef.current = zoom;
+  }, [zoom]);
+
+  useEffect(() => {
+    panRef.current = pan;
+  }, [pan]);
+
+  useEffect(() => {
+    return () => {
+      if (wheelZoomTimerRef.current) clearTimeout(wheelZoomTimerRef.current);
+    };
+  }, []);
+
+  useEffect(() => {
+    const el = viewportRef.current;
+    if (!el || !image || cropPreview || socialTemplate.enabled) return;
+
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const rect = el.getBoundingClientRect();
+      const focalX = e.clientX - rect.left;
+      const focalY = e.clientY - rect.top;
+      const factor = Math.exp(-e.deltaY * WHEEL_ZOOM_SENSITIVITY);
+      const next = zoomAtPoint(
+        zoomRef.current,
+        panRef.current,
+        clampZoom(zoomRef.current * factor),
+        focalX,
+        focalY,
+        rect.width,
+        rect.height,
+      );
+      zoomRef.current = next.zoom;
+      panRef.current = next.pan;
+      setZoom(next.zoom);
+      setPan(next.pan);
+      setWheelZooming(true);
+      if (wheelZoomTimerRef.current) clearTimeout(wheelZoomTimerRef.current);
+      wheelZoomTimerRef.current = setTimeout(() => {
+        wheelZoomTimerRef.current = null;
+        setWheelZooming(false);
+      }, 150);
+    };
+
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, [image, cropPreview, socialTemplate.enabled]);
+
   const setImageFrameIfChanged = useCallback((frame: ImageFrame | null) => {
     if (framesEqual(imageFrameRef.current, frame)) return;
     imageFrameRef.current = frame;
@@ -131,23 +225,40 @@ export function Viewport() {
         : baseAdj;
       const liveGeometry = getSessionRenderGeometry(renderAdj.geometry);
       const renderGeometry = { ...renderAdj, geometry: liveGeometry };
-
-      const frame = computePreviewFrame(
-        el.clientWidth,
-        el.clientHeight,
+      const photoSize = getOutputSize(
         image.width,
         image.height,
         liveGeometry,
       );
-      setImageFrameIfChanged(frame);
-      if (previewMode && isTransformSessionActive()) {
-        syncSessionAfterFrame(frame, liveGeometry);
+
+      if (socialTemplate.enabled && !previewMode) {
+        const layout = layoutSocialTemplatePreview(
+          el.clientWidth,
+          el.clientHeight,
+          photoSize.width,
+          photoSize.height,
+        );
+        setSocialLayout(layout);
+        setImageFrameIfChanged(null);
+      } else {
+        setSocialLayout(null);
+        const frame = computePreviewFrame(
+          el.clientWidth,
+          el.clientHeight,
+          image.width,
+          image.height,
+          liveGeometry,
+        );
+        setImageFrameIfChanged(frame);
+        if (previewMode && isTransformSessionActive()) {
+          syncSessionAfterFrame(frame, liveGeometry);
+        }
       }
 
       pipe.fitToContainer(renderGeometry, false);
       pipe.render(renderGeometry, false);
     },
-    [image, setImageFrameIfChanged],
+    [image, setImageFrameIfChanged, socialTemplate.enabled],
   );
 
   useEffect(() => {
@@ -205,27 +316,15 @@ export function Viewport() {
   const resetView = useCallback(() => {
     panDragRef.current.active = false;
     setIsPanning(false);
+    zoomRef.current = 1;
+    panRef.current = { x: 0, y: 0 };
     setZoom(1);
     setPan({ x: 0, y: 0 });
   }, []);
 
   const measureImageFrame = useCallback(() => {
-    const el = viewportRef.current;
-    if (!el || !image) {
-      setImageFrameIfChanged(null);
-      return;
-    }
-    const g = selectAdjustments(useEditor.getState()).geometry;
-    const frame = computePreviewFrame(
-      el.clientWidth,
-      el.clientHeight,
-      image.width,
-      image.height,
-      getSessionRenderGeometry(g),
-    );
-    setImageFrameIfChanged(frame);
     scheduleTransformRender();
-  }, [image, cropPreview, setImageFrameIfChanged]);
+  }, []);
 
   useEffect(() => {
     if (!canvasRef.current) return;
@@ -248,7 +347,11 @@ export function Viewport() {
   useEffect(() => {
     paintFrame();
     if (!cropPreview) setHistogramTick((t) => t + 1);
-  }, [adjustments, cropPreview, paintFrame]);
+  }, [adjustments, cropPreview, socialTemplate, paintFrame]);
+
+  useEffect(() => {
+    if (socialTemplate.enabled) resetView();
+  }, [socialTemplate.enabled, resetView]);
 
   useEffect(() => {
     measureImageFrame();
@@ -460,6 +563,14 @@ export function Viewport() {
     ? getSessionRenderGeometry(geometry)
     : undefined;
 
+  const showSocialTemplate =
+    !!image && socialTemplate.enabled && !cropPreview && !!socialLayout;
+  const canvasFrame = cropPreview && imageFrame
+    ? imageFrame
+    : showSocialTemplate && socialLayout
+      ? socialLayout.photo
+      : null;
+
   return (
     <div
       ref={viewportRef}
@@ -468,6 +579,7 @@ export function Viewport() {
         dragging &&
           "after:pointer-events-none after:absolute after:inset-2 after:rounded-md after:border-2 after:border-dashed after:border-primary",
         cropPreview && "[&_canvas]:pointer-events-none",
+        showSocialTemplate && "bg-[#1a1a1a] bg-none",
       )}
       onDragOver={(e) => {
         e.preventDefault();
@@ -480,26 +592,45 @@ export function Viewport() {
         handleFiles(e.dataTransfer.files);
       }}
     >
+      {showSocialTemplate && socialLayout && (
+        <div
+          className="pointer-events-none absolute overflow-hidden rounded-[2rem] shadow-2xl ring-1 ring-white/10"
+          style={{
+            left: socialLayout.template.ox,
+            top: socialLayout.template.oy,
+            width: socialLayout.template.dw,
+            height: socialLayout.template.dh,
+            backgroundColor: socialTemplateBackgroundCss(
+              socialTemplate.background,
+            ),
+          }}
+        />
+      )}
       <canvas
         ref={canvasRef}
         className={cn(
           "absolute origin-center",
-          cropPreview && imageFrame
+          canvasFrame
             ? null
             : "inset-0 size-full object-contain object-center",
-          !cropPreview && !isPanning && "transition-transform duration-150 ease-out",
+          !cropPreview &&
+            !showSocialTemplate &&
+            !isPanning &&
+            !wheelZooming &&
+            "transition-transform duration-150 ease-out",
           image &&
             !cropPreview &&
+            !showSocialTemplate &&
             zoom > 1 &&
             (isPanning ? "cursor-grabbing" : "cursor-grab"),
         )}
         style={
-          cropPreview && imageFrame
+          canvasFrame
             ? {
-                left: imageFrame.ox,
-                top: imageFrame.oy,
-                width: imageFrame.dw,
-                height: imageFrame.dh,
+                left: canvasFrame.ox,
+                top: canvasFrame.oy,
+                width: canvasFrame.dw,
+                height: canvasFrame.dh,
               }
             : {
                 transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,

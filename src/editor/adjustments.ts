@@ -25,6 +25,10 @@ export type Adjustments = {
   filmGrain: number;
   filmGrainSize: number;
   filmGrainDensity: number;
+  filmGrainRoughness: number;
+  filmGrainSoftness: number;
+  filmGrainColor: number;
+  filmGrainResponse: number;
   vintage: number;
   film: FilmId;
   geometry: Geometry;
@@ -53,6 +57,10 @@ export function extractEditSettings(adj: Adjustments): EditSettings {
     filmGrain: adj.filmGrain,
     filmGrainSize: adj.filmGrainSize,
     filmGrainDensity: adj.filmGrainDensity,
+    filmGrainRoughness: adj.filmGrainRoughness,
+    filmGrainSoftness: adj.filmGrainSoftness,
+    filmGrainColor: adj.filmGrainColor,
+    filmGrainResponse: adj.filmGrainResponse,
     vintage: adj.vintage,
     film: adj.film,
     curve: adj.curve.map((p) => ({ ...p })),
@@ -87,8 +95,12 @@ export const DEFAULT_ADJUSTMENTS: Adjustments = {
   luminanceNoise: 0,
   colorNoise: 0,
   filmGrain: 0,
-  filmGrainSize: 0.5,
-  filmGrainDensity: 0.5,
+  filmGrainSize: 0.1,
+  filmGrainDensity: 0.9,
+  filmGrainRoughness: 0.4,
+  filmGrainSoftness: 0.35,
+  filmGrainColor: 0.25,
+  filmGrainResponse: 0.25,
   vintage: 0,
   film: "none",
   geometry: cloneGeometry(DEFAULT_GEOMETRY),
@@ -139,5 +151,9 @@ export const EFFECTS_SLIDERS: SliderSpec[] = [
   { key: "filmGrain", label: "Film Grain", min: 0, max: 1, step: 0.01 },
   { key: "filmGrainSize", label: "Grain Size", min: 0, max: 1, step: 0.01 },
   { key: "filmGrainDensity", label: "Grain Density", min: 0, max: 1, step: 0.01 },
+  { key: "filmGrainRoughness", label: "Roughness", min: 0, max: 1, step: 0.01 },
+  { key: "filmGrainSoftness", label: "Softness", min: 0, max: 1, step: 0.01 },
+  { key: "filmGrainColor", label: "Color Grain", min: 0, max: 1, step: 0.01 },
+  { key: "filmGrainResponse", label: "Tone Response", min: 0, max: 1, step: 0.01 },
   { key: "vintage", label: "Vintage", min: 0, max: 1, step: 0.01 },
 ];

@@ -25,3 +25,24 @@ export function fitImageInBox(
     dh,
   };
 }
+
+/** Scale to fill container width; height follows image aspect (may letterbox vertically). */
+export function fitImageFillWidth(
+  boxW: number,
+  boxH: number,
+  imgW: number,
+  imgH: number,
+): ImageFrame {
+  if (boxW <= 0 || boxH <= 0 || imgW <= 0 || imgH <= 0) {
+    return { ox: 0, oy: 0, dw: boxW, dh: boxH };
+  }
+  const scale = boxW / imgW;
+  const dw = boxW;
+  const dh = imgH * scale;
+  return {
+    ox: 0,
+    oy: (boxH - dh) / 2,
+    dw,
+    dh,
+  };
+}

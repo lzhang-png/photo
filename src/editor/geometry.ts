@@ -668,6 +668,24 @@ export function screenRectToSourceCrop(
   );
 }
 
+/** Largest output rect with target aspect that fits inside an inscribed crop. */
+function fitAspectInInscribed(
+  inscribed: { width: number; height: number },
+  aspect: number,
+): { width: number; height: number } {
+  const inscribedAspect = inscribed.width / inscribed.height;
+  if (aspect >= inscribedAspect) {
+    return {
+      width: inscribed.width,
+      height: inscribed.width / aspect,
+    };
+  }
+  return {
+    width: inscribed.height * aspect,
+    height: inscribed.height,
+  };
+}
+
 /** Pixel size of the rendered / exported frame after crop + rotation. */
 export function getOutputSize(
   srcW: number,
@@ -676,7 +694,17 @@ export function getOutputSize(
 ): { width: number; height: number } {
   const cropW = Math.max(1, g.cropW * srcW);
   const cropH = Math.max(1, g.cropH * srcH);
-  return getInscribedRotatedSize(cropW, cropH, rotationRadians(g));
+  const inscribed = getInscribedRotatedSize(cropW, cropH, rotationRadians(g));
+
+  if (g.aspectLocked) {
+    return fitAspectInInscribed(inscribed, g.lockedAspect);
+  }
+  // Full-image level: keep the original photo aspect instead of the
+  // inscribed rect (which widens as the image is straightened).
+  if (g.cropW >= 0.999 && g.cropH >= 0.999) {
+    return fitAspectInInscribed(inscribed, srcW / srcH);
+  }
+  return inscribed;
 }
 
 export function rotate90CW(g: Geometry): Geometry {

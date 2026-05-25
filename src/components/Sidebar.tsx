@@ -3,6 +3,7 @@ import { AdjustmentSlider } from "@/components/AdjustmentSlider";
 import { InfoTooltip } from "@/components/InfoTooltip";
 import { SidebarSection } from "@/components/SidebarSection";
 import { TransformPanel } from "@/components/TransformPanel";
+import { SocialTemplatePanel } from "@/components/SocialTemplatePanel";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
@@ -182,6 +183,8 @@ export function Sidebar() {
 
           <TransformPanel />
 
+          <SocialTemplatePanel />
+
           <SidebarSection title="Light">
             <div className="space-y-5">
               {TONE_SLIDERS.map((s) => (
@@ -266,8 +269,8 @@ export function Sidebar() {
           </SidebarSection>
 
           <SidebarSection
-            title="Effects"
-            hint="Creative overlays — grain amount, size (coarse vs fine particles), and density (light even spread vs rich heavy grain); vintage fades tones, warms color, and adds a soft vignette."
+            title="Film Effects"
+            hint="Creative overlays — grain amount and size; density sets particle spacing (sparse vs packed); roughness adds organic clumping, softness blurs grain edges, color grain tints channels, tone response links grain to shadows and midtones; vintage fades tones and adds vignette."
           >
             <div className="space-y-5">
               {EFFECTS_SLIDERS.map((s) => (

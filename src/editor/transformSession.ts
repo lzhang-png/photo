@@ -176,18 +176,20 @@ export function syncSessionAfterFrame(frame: ImageFrame, geom: Geometry) {
     (session.frame.dw !== frame.dw || session.frame.dh !== frame.dh);
 
   if (session.screenRect && frameResized && session.prevFrameW > 0 && session.prevFrameH > 0) {
-    session.screenRect = fitRect(
-      scaleScreenRect(
-        session.screenRect,
-        session.prevFrameW,
-        session.prevFrameH,
-        frame.dw,
-        frame.dh,
-      ),
-      session.live,
-      frame.dw,
-      frame.dh,
-    );
+    session.screenRect = session.live.aspectLocked
+      ? clampScreenRectPosition(session.screenRect, frame.dw, frame.dh)
+      : fitRect(
+          scaleScreenRect(
+            session.screenRect,
+            session.prevFrameW,
+            session.prevFrameH,
+            frame.dw,
+            frame.dh,
+          ),
+          session.live,
+          frame.dw,
+          frame.dh,
+        );
   }
 
   if (!session.screenRect) {
@@ -208,7 +210,10 @@ export function syncSessionAfterFrame(frame: ImageFrame, geom: Geometry) {
 export function setSessionStraighten(straighten: number) {
   if (!session.active) return;
   session.live = { ...session.live, straighten };
-  session.screenRect = null;
+  // Keep the on-screen crop frame fixed while leveling with aspect locked.
+  if (!session.live.aspectLocked) {
+    session.screenRect = null;
+  }
   scheduleTransformRender();
 }
 

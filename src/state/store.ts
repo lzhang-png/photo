@@ -3,6 +3,7 @@ import { Adjustments, DEFAULT_ADJUSTMENTS, applyEditSettings, extractEditSetting
 import {
   cloneAdjustments,
   cloneRawSettings,
+  cloneSocialTemplate,
   fileFingerprint,
   loadSession,
   saveSession,
@@ -40,6 +41,11 @@ import {
   supportsDirectoryPicker,
 } from "../editor/fileAccess";
 import { importPhotoFiles as importPhotoFilesImpl } from "../editor/importPhotos";
+import {
+  DEFAULT_SOCIAL_TEMPLATE,
+  normalizeSocialTemplate,
+  type SocialTemplate,
+} from "../editor/socialTemplate";
 
 export type PhotoRecord = {
   id: PhotoId;
@@ -49,6 +55,7 @@ export type PhotoRecord = {
   isRaw: boolean;
   adjustments: Adjustments;
   rawSettings: RawSettings;
+  socialTemplate: SocialTemplate;
   image: DecodedImage | null;
   thumbnailUrl: string | null;
 };
@@ -79,6 +86,7 @@ type EditorState = {
     value: Adjustments[K],
   ) => void;
   setGeometry: (patch: Partial<Geometry>) => void;
+  setSocialTemplate: (patch: Partial<SocialTemplate>) => void;
   setRawSetting: <K extends keyof RawSettings>(
     key: K,
     value: RawSettings[K],
@@ -116,6 +124,7 @@ function buildInitialCatalog(): Pick<
       isRaw: p.isRaw,
       adjustments: cloneAdjustments(p.adjustments),
       rawSettings: cloneRawSettings(p.rawSettings),
+      socialTemplate: cloneSocialTemplate(p.socialTemplate),
       image: null,
       thumbnailUrl: null,
     };
@@ -151,6 +160,7 @@ function schedulePersist(getState: () => EditorState) {
           isRaw: p.isRaw,
           adjustments: cloneAdjustments(p.adjustments),
           rawSettings: cloneRawSettings(p.rawSettings),
+          socialTemplate: cloneSocialTemplate(p.socialTemplate),
         })),
     };
     saveSession(session);
@@ -232,6 +242,7 @@ export const useEditor = create<EditorState>((set, get) => ({
         isRaw,
         adjustments: cloneAdjustments(DEFAULT_ADJUSTMENTS),
         rawSettings: cloneRawSettings(DEFAULT_RAW_SETTINGS),
+        socialTemplate: cloneSocialTemplate(DEFAULT_SOCIAL_TEMPLATE),
         image: null,
         thumbnailUrl: null,
       },
@@ -302,12 +313,17 @@ export const useEditor = create<EditorState>((set, get) => ({
 
       let geometry = merged;
       if (active.image && rotationChanged && !get().cropEditing) {
-        geometry = preserveCropAcrossRotation(
-          prev,
-          merged,
-          active.image.width,
-          active.image.height,
-        );
+        const isFullCrop = prev.cropW >= 0.999 && prev.cropH >= 0.999;
+        // Full-frame level only changes straighten; getOutputSize keeps the
+        // original photo aspect. Partial / locked crops remap the source crop.
+        if (!isFullCrop || merged.aspectLocked) {
+          geometry = preserveCropAcrossRotation(
+            prev,
+            merged,
+            active.image.width,
+            active.image.height,
+          );
+        }
       }
       geometry = normalizeGeometry(geometry);
       if (active.image && !rotationChanged && !get().cropEditing) {
@@ -319,6 +335,20 @@ export const useEditor = create<EditorState>((set, get) => ({
       }
       return updateActive(s, {
         adjustments: { ...active.adjustments, geometry },
+      });
+    });
+    schedulePersist(get);
+  },
+
+  setSocialTemplate: (patch) => {
+    set((s) => {
+      const active = getActive(s);
+      if (!active) return {};
+      return updateActive(s, {
+        socialTemplate: normalizeSocialTemplate({
+          ...active.socialTemplate,
+          ...patch,
+        }),
       });
     });
     schedulePersist(get);
@@ -536,6 +566,10 @@ export function selectAdjustments(s: EditorState) {
 
 export function selectRawSettings(s: EditorState) {
   return getActive(s)?.rawSettings ?? DEFAULT_RAW_SETTINGS;
+}
+
+export function selectSocialTemplate(s: EditorState) {
+  return getActive(s)?.socialTemplate ?? DEFAULT_SOCIAL_TEMPLATE;
 }
 
 export function selectNeedsReopen(s: EditorState): boolean {

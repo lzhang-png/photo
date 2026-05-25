@@ -103,6 +103,10 @@ export class Pipeline {
       "u_filmGrain",
       "u_filmGrainSize",
       "u_filmGrainDensity",
+      "u_filmGrainRoughness",
+      "u_filmGrainSoftness",
+      "u_filmGrainColor",
+      "u_filmGrainResponse",
       "u_vintage",
       "u_texelSize",
       "u_flipY",
@@ -303,6 +307,10 @@ export class Pipeline {
     gl.uniform1f(uniforms.u_filmGrain!, adj.filmGrain);
     gl.uniform1f(uniforms.u_filmGrainSize!, adj.filmGrainSize);
     gl.uniform1f(uniforms.u_filmGrainDensity!, adj.filmGrainDensity);
+    gl.uniform1f(uniforms.u_filmGrainRoughness!, adj.filmGrainRoughness);
+    gl.uniform1f(uniforms.u_filmGrainSoftness!, adj.filmGrainSoftness);
+    gl.uniform1f(uniforms.u_filmGrainColor!, adj.filmGrainColor);
+    gl.uniform1f(uniforms.u_filmGrainResponse!, adj.filmGrainResponse);
     gl.uniform1f(uniforms.u_vintage!, adj.vintage);
     gl.uniform2f(uniforms.u_texelSize!, 1 / image.width, 1 / image.height);
     gl.uniform1f(uniforms.u_flipY!, image.flipY ? 1.0 : 0.0);

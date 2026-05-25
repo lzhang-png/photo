@@ -32,6 +32,10 @@ uniform float u_colorNoise;
 uniform float u_filmGrain;
 uniform float u_filmGrainSize;
 uniform float u_filmGrainDensity;
+uniform float u_filmGrainRoughness;
+uniform float u_filmGrainSoftness;
+uniform float u_filmGrainColor;
+uniform float u_filmGrainResponse;
 uniform float u_vintage;
 uniform vec2 u_texelSize;     // 1 / source image size in pixels
 uniform float u_flipY;
@@ -168,6 +172,25 @@ float worley(vec2 p) {
 
 float filmGrainCoarse(vec2 p) {
   return pow(1.0 - worley(p), 1.4);
+}
+
+// Worley particles with spacing (density) decoupled from particle radius (size).
+float worleySpaced(
+  vec2 pix,
+  float cellPx,
+  float spacingMul,
+  float radiusPx,
+  float shapePow,
+  float sparsity
+) {
+  float pitch = max(cellPx * spacingMul, 1e-3);
+  vec2 g = pix / pitch;
+  float d = worley(g);
+  float radiusNorm = clamp(radiusPx / pitch, 0.05, 0.92);
+  float particle = 1.0 - smoothstep(radiusNorm * 0.22, radiusNorm, d);
+  vec2 cellIdx = floor(g);
+  float keep = step(hash21(cellIdx + 17.3), sparsity);
+  return pow(particle, shapePow) * keep;
 }
 
 vec3 applyFilm(vec3 c, vec2 uv) {
@@ -408,12 +431,12 @@ vec3 applyVintage(vec3 c, vec2 outUV) {
   return clamp(c, 0.0, 1.0);
 }
 
-// Photographic grain in linear light — uniform base with subtle tone-linked variation.
+// Photographic grain in linear light — uniform base with optional tone response.
 vec3 applyFilmGrain(vec3 cSrgb, vec2 srcUV) {
   if (u_filmGrain < 1e-5) return cSrgb;
 
   vec3 lin = srgb_to_linear(clamp(cSrgb, 0.0, 1.0));
-  float density = clamp(luma_linear(lin), 0.02, 0.98);
+  float luma = clamp(luma_linear(lin), 0.0, 1.0);
 
   // Scale grain to image resolution (~12 MP reference) so it stays visible
   // when the canvas downscales a large photo for preview.
@@ -422,51 +445,73 @@ vec3 applyFilmGrain(vec3 cSrgb, vec2 srcUV) {
   float sizeT = u_filmGrainSize - 0.5;
   float sizeRange = mix(2.4, 0.75, smoothstep(0.0, 0.5, u_filmGrainSize));
   float sizeMul = exp2(sizeT * sizeRange);
-  // Mostly uniform cell size, with slight tone-linked variation.
-  float toneShape = pow(density, 0.42);
-  float cell = 24.0 * resScale * sizeMul * mix(1.08, 0.92, toneShape);
+  float cell = 24.0 * resScale * sizeMul;
+  // Density: worley grid pitch + sparsity. Size: particle radius in pixels.
+  float spacingMul = mix(0.88, 0.3, u_filmGrainDensity);
+  float particlePx = cell * mix(0.34, 0.11, u_filmGrainSize);
+  float sparsity = mix(0.88, 1.02, u_filmGrainDensity);
 
   vec2 pix = srcUV / max(u_texelSize, vec2(1e-6));
   vec2 g = pix / cell;
 
-  // Gentle tone-driven warp — darker areas shift the lattice a little more.
-  float warpAmt = mix(0.5, 0.85, toneShape);
+  float rough = u_filmGrainRoughness;
+  float soft = u_filmGrainSoftness;
+  float warpAmt = mix(0.22, 0.9, rough);
   g += vec2(
     filmGrainFine(g * 0.32 + 1.7),
     filmGrainFine(g * 0.32 + 9.3)
   ) * warpAmt;
 
-  // Per-macro-cell random rotation, modulated by local brightness.
   vec2 cellId = floor(pix / (cell * 3.5));
   float phase = hash21(cellId) * 6.28318;
-  g += vec2(cos(phase), sin(phase)) * (density - 0.5) * 0.2;
+  g += vec2(cos(phase), sin(phase)) * mix(0.04, 0.16, rough);
 
+  float coarsePow = mix(1.45, 0.85, soft);
   float coarse =
-    filmGrainCoarse(g) * 0.68 +
-    filmGrainCoarse(g * 0.52 + 6.4) * 0.32;
-  coarse *= mix(1.06, 0.94, toneShape);
+    worleySpaced(pix, cell, spacingMul, particlePx, coarsePow, sparsity) * 0.68 +
+    worleySpaced(
+      pix + vec2(cell * 4.2, cell * 2.8),
+      cell,
+      spacingMul,
+      particlePx * 0.88,
+      coarsePow,
+      sparsity
+    ) * 0.32;
+  coarse += worleySpaced(
+    pix + vec2(cell * 1.6, cell * 5.2),
+    cell,
+    spacingMul * 1.08,
+    particlePx * 1.04,
+    coarsePow,
+    sparsity
+  ) * rough * 0.22;
+
   float fine =
     filmGrainFine(g * 4.5 + 2.2) * 0.55 +
     filmGrainFine(g * 8.0 - 3.1) * 0.25 +
     filmGrainFine(g * 14.0 + 5.7) * 0.12;
-  fine *= mix(0.94, 1.06, toneShape);
-
-  // Density: low = light, evenly spread fine pepper; high = richer coarse + fine mix.
-  float coarseMix = mix(0.32, 1.05, u_filmGrainDensity);
-  float fineMix = mix(1.08, 1.45, u_filmGrainDensity);
-  float densityAmp = mix(0.52, 1.0, u_filmGrainDensity);
+  fine *= mix(1.0, 0.45, soft);
 
   float grain =
-    ((coarse - 0.5) * 1.15 * coarseMix + fine * fineMix) * densityAmp;
-  vec3 grainRgb = vec3(grain);
+    ((coarse - 0.5) * 1.15 * 0.68 + fine * 1.27 * mix(1.0, 0.62, soft)) * 0.85;
+  grain *= mix(1.0, 0.72, soft);
 
-  float mid = 4.0 * density * (1.0 - density);
-  float tone = mix(0.55, 1.0, mid);
-  tone *= 1.0 - smoothstep(0.92, 0.995, density);
+  float chroma = u_filmGrainColor;
+  float rOff = (filmGrainFine(g * 3.1 + 1.1) + filmGrainCoarse(g * 0.7 + 2.4) - 0.5) * 0.35;
+  float bOff = (filmGrainFine(g * 2.7 + 4.9) + filmGrainCoarse(g * 0.6 + 5.8) - 0.5) * 0.35;
+  vec3 grainRgb = mix(vec3(grain), vec3(grain + rOff, grain, grain + bOff), chroma);
+
+  float resp = u_filmGrainResponse * u_filmGrainResponse;
+  float shadowLift = smoothstep(0.42, 0.0, luma);
+  float highlightCut = smoothstep(0.68, 0.97, luma);
+  float mid = pow(4.0 * luma * (1.0 - luma), 0.7);
+  float filmTone = 1.0 + shadowLift * 0.95 + mid * 0.35 - highlightCut * 0.92;
+  filmTone = clamp(filmTone, 0.06, 1.75);
+  float tone = mix(1.0, filmTone, resp);
   float strength = u_filmGrain * tone;
 
   lin *= 1.0 + grainRgb * strength * 0.55;
-  lin += grainRgb * strength * 0.035 * (1.0 - smoothstep(0.0, 0.18, density));
+  lin += grainRgb * strength * mix(0.035, 0.14, resp * (0.35 + shadowLift * 0.65));
 
   vec3 outSrgb = clamp(linear_to_srgb(max(lin, vec3(0.0))), 0.0, 1.0);
   // Perceptual boost so grain survives preview downscaling.
