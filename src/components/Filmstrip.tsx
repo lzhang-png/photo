@@ -1,10 +1,19 @@
 import { X } from "lucide-react";
-import { useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ScrollArea, ScrollBar } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
 import { useEditor } from "../state/store";
+
+type HoverState = {
+  id: string;
+  top: number;
+  left: number;
+};
+
+/** Keep the X visible while moving from the thumb to the button across the gap. */
+const HIDE_DELAY_MS = 80;
 
 export function Filmstrip() {
   const photoOrder = useEditor((s) => s.photoOrder);
@@ -12,76 +21,134 @@ export function Filmstrip() {
   const activePhotoId = useEditor((s) => s.activePhotoId);
   const setActivePhoto = useEditor((s) => s.setActivePhoto);
   const removePhoto = useEditor((s) => s.removePhoto);
-  const [hoverId, setHoverId] = useState<string | null>(null);
+
+  const [hover, setHover] = useState<HoverState | null>(null);
+  const hideTimerRef = useRef<number | null>(null);
+  const hoveredThumbRef = useRef<HTMLElement | null>(null);
+
+  const cancelHide = useCallback(() => {
+    if (hideTimerRef.current !== null) {
+      window.clearTimeout(hideTimerRef.current);
+      hideTimerRef.current = null;
+    }
+  }, []);
+
+  const scheduleHide = useCallback(() => {
+    cancelHide();
+    hideTimerRef.current = window.setTimeout(() => {
+      hideTimerRef.current = null;
+      hoveredThumbRef.current = null;
+      setHover(null);
+    }, HIDE_DELAY_MS);
+  }, [cancelHide]);
+
+  useEffect(() => cancelHide, [cancelHide]);
+
+  const syncHoverPosition = useCallback((id: string) => {
+    const el = hoveredThumbRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    setHover({
+      id,
+      top: r.top + r.height / 2,
+      left: r.right,
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!hover) return;
+    const sync = () => syncHoverPosition(hover.id);
+    sync();
+    window.addEventListener("scroll", sync, true);
+    window.addEventListener("resize", sync);
+    return () => {
+      window.removeEventListener("scroll", sync, true);
+      window.removeEventListener("resize", sync);
+    };
+  }, [hover?.id, syncHoverPosition]);
+
+  const onThumbEnter = (id: string, target: HTMLElement) => {
+    cancelHide();
+    hoveredThumbRef.current =
+      target.querySelector<HTMLElement>("[data-filmstrip-thumb]") ?? target;
+    syncHoverPosition(id);
+  };
 
   if (photoOrder.length === 0) return null;
 
   return (
-    <ScrollArea className="h-full w-[84px] shrink-0 border-r border-border bg-sidebar">
-      <div className="flex flex-col items-center gap-1.5 p-1.5 pt-3">
-        {photoOrder.map((id) => {
-          const photo = photos[id];
-          if (!photo) return null;
-          const isActive = id === activePhotoId;
-          const needsFile = !photo.sourceFile;
-          const showRemove = hoverId === id;
-          return (
-            <div
-              key={id}
-              className={cn(
-                "flex shrink-0 items-stretch overflow-hidden rounded-md border-2 transition-colors",
-                isActive ? "border-primary" : "border-transparent hover:border-border",
-              )}
-              onMouseEnter={() => setHoverId(id)}
-              onMouseLeave={() => setHoverId(null)}
-            >
-              {showRemove && (
-                <Button
-                  type="button"
-                  variant="secondary"
-                  className="h-16 w-5 min-w-5 shrink-0 rounded-none border-0 p-0 shadow-none active:!translate-y-0"
-                  title="Remove from catalog"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    removePhoto(id);
-                  }}
-                >
-                  <X className="size-3" />
-                </Button>
-              )}
-              <button
-                type="button"
-                className={cn(
-                  "relative size-16 shrink-0 overflow-hidden bg-muted",
-                  needsFile && "opacity-65",
-                )}
-                onClick={() => setActivePhoto(id)}
-                title={photo.filename}
+    <>
+      <ScrollArea className="h-full w-[76px] shrink-0 border-r border-border bg-sidebar">
+        <div className="flex flex-col items-center gap-1.5 p-1.5 pt-3">
+          {photoOrder.map((id) => {
+            const photo = photos[id];
+            if (!photo) return null;
+            const isActive = id === activePhotoId;
+            const needsFile = !photo.sourceFile;
+            return (
+              <div
+                key={id}
+                className="relative shrink-0"
+                onMouseEnter={(e) => onThumbEnter(id, e.currentTarget)}
+                onMouseLeave={scheduleHide}
               >
-                {photo.thumbnailUrl ? (
-                  <img
-                    className="size-full object-cover"
-                    src={photo.thumbnailUrl}
-                    alt=""
-                    draggable={false}
-                  />
-                ) : (
-                  <span className="block size-full bg-[repeating-conic-gradient(#2a2a2a_0%_25%,#222_0%_50%)] bg-size-[12px_12px]" />
-                )}
-                {needsFile && (
-                  <Badge
-                    variant="secondary"
-                    className="absolute right-0.5 bottom-0.5 left-0.5 h-4 justify-center px-0.5 text-[8px] uppercase"
-                  >
-                    reopen
-                  </Badge>
-                )}
-              </button>
-            </div>
-          );
-        })}
-      </div>
-      <ScrollBar orientation="vertical" />
-    </ScrollArea>
+                <button
+                  type="button"
+                  data-filmstrip-thumb
+                  className={cn(
+                    "relative size-16 overflow-hidden rounded-md border-2 bg-muted transition-colors",
+                    isActive ? "border-primary" : "border-transparent hover:border-border",
+                    needsFile && "opacity-65",
+                  )}
+                  onClick={() => setActivePhoto(id)}
+                  title={photo.filename}
+                >
+                  {photo.thumbnailUrl ? (
+                    <img
+                      className="size-full object-cover"
+                      src={photo.thumbnailUrl}
+                      alt=""
+                      draggable={false}
+                    />
+                  ) : (
+                    <span className="block size-full bg-[repeating-conic-gradient(#2a2a2a_0%_25%,#222_0%_50%)] bg-size-[12px_12px]" />
+                  )}
+                  {needsFile && (
+                    <Badge
+                      variant="secondary"
+                      className="absolute right-0.5 bottom-0.5 left-0.5 h-4 justify-center px-0.5 text-[8px] uppercase"
+                    >
+                      reopen
+                    </Badge>
+                  )}
+                </button>
+              </div>
+            );
+          })}
+        </div>
+        <ScrollBar orientation="vertical" />
+      </ScrollArea>
+      {hover && (
+        <Button
+          type="button"
+          variant="secondary"
+          size="icon-sm"
+          className="fixed z-50 size-5 -translate-y-1/2 shadow-md active:-translate-y-1/2"
+          style={{ top: hover.top, left: hover.left }}
+          title="Remove from catalog"
+          onMouseEnter={cancelHide}
+          onMouseLeave={scheduleHide}
+          onClick={(e) => {
+            e.stopPropagation();
+            const idToRemove = hover.id;
+            cancelHide();
+            setHover(null);
+            removePhoto(idToRemove);
+          }}
+        >
+          <X className="size-3" />
+        </Button>
+      )}
+    </>
   );
 }
