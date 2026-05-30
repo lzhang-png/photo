@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { ChevronDown, Download, ImagePlus } from "lucide-react";
+import { ChevronDown, Download } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -15,6 +15,7 @@ import {
   selectNeedsReopen,
 } from "./state/store";
 import { StatusPill, isPhotoLoadingStatus } from "./components/StatusPill";
+import { PhotoLogo } from "./components/PhotoLogo";
 import { Viewport } from "./components/Viewport";
 import { Filmstrip } from "./components/Filmstrip";
 import { Sidebar } from "./components/Sidebar";
@@ -234,10 +235,7 @@ export function App() {
       style={{ gridTemplateColumns: `1fr ${sidebarWidth}px` }}
     >
       <header className="col-span-full flex shrink-0 items-center gap-2.5 border-b border-border bg-sidebar px-4 py-2">
-        <Button variant="outline" onClick={onOpen}>
-          <ImagePlus className="size-3.5" />
-          Import photo
-        </Button>
+        <PhotoLogo size="sm" className="mr-2 shrink-0 self-center" />
         <div className="flex min-w-0 flex-1 flex-col items-center justify-center px-2">
           {showPhotoLoading && loadingStatus ? (
             <div className="flex h-[3.25rem] w-full max-w-[min(100%,36rem)] items-center justify-center">
@@ -301,7 +299,7 @@ export function App() {
         </DropdownMenu>
       </header>
       <div className="flex h-full min-h-0 min-w-0 overflow-hidden">
-        <Filmstrip />
+        <Filmstrip onOpen={onOpen} />
         <div className="relative h-full min-h-0 min-w-0 flex-1">
           <Viewport />
         </div>

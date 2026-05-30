@@ -1,4 +1,4 @@
-import { X } from "lucide-react";
+import { Plus, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { Badge } from "@/components/ui/badge";
@@ -16,7 +16,11 @@ type HoverState = {
 /** Keep the X visible while moving from the thumb to the button across the gap. */
 const HIDE_DELAY_MS = 80;
 
-export function Filmstrip() {
+type FilmstripProps = {
+  onOpen: () => void | Promise<void>;
+};
+
+export function Filmstrip({ onOpen }: FilmstripProps) {
   const photoOrder = useEditor((s) => s.photoOrder);
   const photos = useEditor((s) => s.photos);
   const activePhotoId = useEditor((s) => s.activePhotoId);
@@ -73,8 +77,7 @@ export function Filmstrip() {
 
   const onThumbEnter = (id: string, target: HTMLElement) => {
     cancelHide();
-    hoveredThumbRef.current =
-      target.querySelector<HTMLElement>("[data-filmstrip-thumb]") ?? target;
+    hoveredThumbRef.current = target;
     syncHoverPosition(id);
   };
 
@@ -86,62 +89,71 @@ export function Filmstrip() {
     setClearOpen(false);
   };
 
-  if (photoOrder.length === 0) return null;
-
   return (
     <>
-      <div className="flex h-full w-[76px] shrink-0 flex-col border-r border-border bg-sidebar">
+      <div className="flex h-full w-[88px] shrink-0 flex-col border-r border-border bg-sidebar">
+        <div className="shrink-0 border-b border-border p-1.5">
+          <Button
+            type="button"
+            variant="outline"
+            className="h-9 min-h-9 w-full gap-1 px-1 text-[11px] leading-tight"
+            onClick={onOpen}
+          >
+            <Plus className="size-3.5 shrink-0" />
+            Photo
+          </Button>
+        </div>
+        {photoOrder.length > 0 ? (
+          <>
         <ScrollArea className="min-h-0 flex-1">
-          <div className="flex flex-col items-center gap-1.5 p-1.5 pt-3 pb-1.5">
+          <div className="flex w-full flex-col gap-1.5 p-1.5">
           {photoOrder.map((id) => {
             const photo = photos[id];
             if (!photo) return null;
             const isActive = id === activePhotoId;
             const needsFile = !photo.sourceFile;
             return (
-              <div
+              <button
                 key={id}
-                className="relative shrink-0"
+                type="button"
+                data-filmstrip-thumb
+                className={cn(
+                  "relative block aspect-square w-full shrink-0 overflow-hidden rounded-md border-2 bg-muted p-0 transition-colors",
+                  isActive
+                    ? "border-primary"
+                    : "border-transparent hover:border-border",
+                  needsFile && "opacity-65",
+                )}
+                onClick={() => setActivePhoto(id)}
                 onMouseEnter={(e) => onThumbEnter(id, e.currentTarget)}
                 onMouseLeave={scheduleHide}
+                title={photo.filename}
               >
-                <button
-                  type="button"
-                  data-filmstrip-thumb
-                  className={cn(
-                    "relative size-16 overflow-hidden rounded-md border-2 bg-muted transition-colors",
-                    isActive ? "border-primary" : "border-transparent hover:border-border",
-                    needsFile && "opacity-65",
-                  )}
-                  onClick={() => setActivePhoto(id)}
-                  title={photo.filename}
-                >
-                  {photo.thumbnailUrl ? (
-                    <img
-                      className="size-full object-cover"
-                      src={photo.thumbnailUrl}
-                      alt=""
-                      draggable={false}
-                    />
-                  ) : (
-                    <span className="block size-full bg-[repeating-conic-gradient(#2a2a2a_0%_25%,#222_0%_50%)] bg-size-[12px_12px]" />
-                  )}
-                  {needsFile && (
-                    <Badge
-                      variant="secondary"
-                      className="absolute right-0.5 bottom-0.5 left-0.5 h-4 justify-center px-0.5 text-[8px] uppercase"
-                    >
-                      reopen
-                    </Badge>
-                  )}
-                </button>
-              </div>
+                {photo.thumbnailUrl ? (
+                  <img
+                    className="size-full object-cover"
+                    src={photo.thumbnailUrl}
+                    alt=""
+                    draggable={false}
+                  />
+                ) : (
+                  <span className="block size-full bg-[repeating-conic-gradient(#2a2a2a_0%_25%,#222_0%_50%)] bg-size-[12px_12px]" />
+                )}
+                {needsFile && (
+                  <Badge
+                    variant="secondary"
+                    className="absolute right-0.5 bottom-0.5 left-0.5 h-4 justify-center px-0.5 text-[8px] uppercase"
+                  >
+                    reopen
+                  </Badge>
+                )}
+              </button>
             );
           })}
           </div>
           <ScrollBar orientation="vertical" />
         </ScrollArea>
-        <div className="my-3 shrink-0 border-t border-border p-1.5">
+        <div className="shrink-0 border-t border-border p-1.5">
           <Button
             type="button"
             variant="ghost"
@@ -152,6 +164,8 @@ export function Filmstrip() {
             Clear all
           </Button>
         </div>
+          </>
+        ) : null}
       </div>
       {hover && (
         <Button
