@@ -67,68 +67,66 @@ export function Sidebar() {
 
   return (
     <aside className="flex h-full min-h-0 flex-col overflow-hidden border-l border-border bg-sidebar">
+      <div className="shrink-0 border-b border-border px-4 py-3">
+        <div className="grid grid-cols-6 gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            className="col-span-2 h-9 min-h-9 w-full"
+            disabled={disabled}
+            title="Copy tone, color, detail, effects, film, and curve"
+            onClick={copyEditSettings}
+          >
+            <ClipboardCopy className="size-3.5" />
+            Copy
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            className="col-span-2 h-9 min-h-9 w-full"
+            disabled={disabled || !editSettingsClipboard}
+            title="Paste copied edit settings"
+            onClick={pasteEditSettings}
+          >
+            <ClipboardPaste className="size-3.5" />
+            Paste
+          </Button>
+          <Button
+            type="button"
+            variant="destructive"
+            className="col-span-2 h-9 min-h-9 w-full"
+            disabled={disabled}
+            onClick={resetAdjustments}
+          >
+            <RotateCcw className="size-3.5" />
+            Reset
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            className="col-span-3 h-9 min-h-9 w-full"
+            title="Undo (⌘Z)"
+            disabled={disabled || !canUndo}
+            onClick={undo}
+          >
+            <Undo2 className="size-3.5" />
+            Undo
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            className="col-span-3 h-9 min-h-9 w-full"
+            title="Redo (⌘⇧Z)"
+            disabled={disabled || !canRedo}
+            onClick={redo}
+          >
+            <Redo2 className="size-3.5" />
+            Redo
+          </Button>
+        </div>
+      </div>
       <ScrollArea className="min-h-0 flex-1">
         <div className="py-4">
-          <SidebarSection
-            title="Edit Settings"
-            hint="Copy tone, color, detail, effects, film, and curve from this photo. Crop, rotation, and straighten are not included."
-          >
-            <div className="grid grid-cols-6 gap-2">
-              <Button
-                type="button"
-                variant="outline"
-                className="col-span-2 h-9 min-h-9 w-full"
-                disabled={disabled}
-                onClick={copyEditSettings}
-              >
-                <ClipboardCopy className="size-3.5" />
-                Copy
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                className="col-span-2 h-9 min-h-9 w-full"
-                disabled={disabled || !editSettingsClipboard}
-                onClick={pasteEditSettings}
-              >
-                <ClipboardPaste className="size-3.5" />
-                Paste
-              </Button>
-              <Button
-                type="button"
-                variant="destructive"
-                className="col-span-2 h-9 min-h-9 w-full"
-                disabled={disabled}
-                onClick={resetAdjustments}
-              >
-                <RotateCcw className="size-3.5" />
-                Reset
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                className="col-span-3 h-9 min-h-9 w-full"
-                title="Undo (⌘Z)"
-                disabled={disabled || !canUndo}
-                onClick={undo}
-              >
-                <Undo2 className="size-3.5" />
-                Undo
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                className="col-span-3 h-9 min-h-9 w-full"
-                title="Redo (⌘⇧Z)"
-                disabled={disabled || !canRedo}
-                onClick={redo}
-              >
-                <Redo2 className="size-3.5" />
-                Redo
-              </Button>
-            </div>
-          </SidebarSection>
-
           <PresetsPanel />
 
           {isRaw && (

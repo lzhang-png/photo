@@ -21,7 +21,7 @@ export type LinearGradientMask = {
   /** Source-normalized coords (0–1), y from visual top — matches crop / texUV. */
   p0: { x: number; y: number };
   p1: { x: number; y: number };
-  /** Softness along gradient axis, 0 = hard, ~0.15–0.35 typical. */
+  /** Softness along gradient axis, 0 = hard, up to 0.5 (50%). */
   feather: number;
   light: ToneMaskDeltas;
   color: ColorMaskDeltas;
@@ -35,6 +35,8 @@ export const DEFAULT_TONE_MASK: ToneMaskDeltas = {
   whites: 0,
   blacks: 0,
 };
+
+export const DEFAULT_LINEAR_MASK_FEATHER = 0.5;
 
 export const DEFAULT_COLOR_MASK: ColorMaskDeltas = {
   temperature: 0,
@@ -50,7 +52,7 @@ export function createLinearGradientMask(name?: string): LinearGradientMask {
     enabled: true,
     p0: { x: 0.15, y: 0.5 },
     p1: { x: 0.85, y: 0.5 },
-    feather: 0.2,
+    feather: DEFAULT_LINEAR_MASK_FEATHER,
     light: { ...DEFAULT_TONE_MASK },
     color: { ...DEFAULT_COLOR_MASK },
   };
@@ -82,7 +84,7 @@ export function normalizeLinearMasks(
       x: clamp01(m.p1?.x ?? 0.85),
       y: clamp01(m.p1?.y ?? 0.5),
     },
-    feather: clamp(m.feather ?? 0.2, 0.02, 0.5),
+    feather: clamp(m.feather ?? DEFAULT_LINEAR_MASK_FEATHER, 0.02, 0.5),
     light: { ...DEFAULT_TONE_MASK, ...m.light },
     color: { ...DEFAULT_COLOR_MASK, ...m.color },
   }));

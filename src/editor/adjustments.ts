@@ -39,8 +39,8 @@ export type Adjustments = {
   linearMasks: LinearGradientMask[];
 };
 
-/** Tone, color, film, and curve — everything except crop/rotate/straighten. */
-export type EditSettings = Omit<Adjustments, "geometry">;
+/** Tone, color, film, and curve — everything except crop/rotate/straighten and local masks. */
+export type EditSettings = Omit<Adjustments, "geometry" | "linearMasks">;
 
 export function extractEditSettings(adj: Adjustments): EditSettings {
   return {
@@ -68,13 +68,6 @@ export function extractEditSettings(adj: Adjustments): EditSettings {
     vintage: adj.vintage,
     film: adj.film,
     curve: adj.curve.map((p) => ({ ...p })),
-    linearMasks: adj.linearMasks.map((m) => ({
-      ...m,
-      p0: { ...m.p0 },
-      p1: { ...m.p1 },
-      light: { ...m.light },
-      color: { ...m.color },
-    })),
   };
 }
 
@@ -87,7 +80,7 @@ export function applyEditSettings(
     ...edits,
     geometry: cloneGeometry(adj.geometry),
     curve: edits.curve.map((p) => ({ ...p })),
-    linearMasks: edits.linearMasks.map((m) => ({
+    linearMasks: adj.linearMasks.map((m) => ({
       ...m,
       p0: { ...m.p0 },
       p1: { ...m.p1 },

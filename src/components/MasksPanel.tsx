@@ -17,6 +17,7 @@ import {
 } from "../editor/adjustments";
 import {
   MAX_LINEAR_MASKS,
+  DEFAULT_LINEAR_MASK_FEATHER,
   type ColorMaskDeltas,
   type LinearGradientMask,
   type ToneMaskDeltas,
@@ -55,9 +56,9 @@ function MaskAdjustmentDrawer({
               {Math.round(mask.feather * 100)}%
             </span>
             <SliderResetSlot
-              visible={mask.feather !== 0.2}
+              visible={mask.feather !== DEFAULT_LINEAR_MASK_FEATHER}
               disabled={disabled}
-              onClick={() => onUpdateMask({ feather: 0.2 })}
+              onClick={() => onUpdateMask({ feather: DEFAULT_LINEAR_MASK_FEATHER })}
             />
           </div>
         </div>
@@ -67,13 +68,13 @@ function MaskAdjustmentDrawer({
           max={0.5}
           step={0.01}
           value={[mask.feather]}
-          pivotValue={0.2}
+          pivotValue={DEFAULT_LINEAR_MASK_FEATHER}
           disabled={disabled}
           onValueChange={(v) => {
             const n = Array.isArray(v) ? v[0] : v;
             if (n !== undefined) onUpdateMask({ feather: n });
           }}
-          onDoubleClick={() => onUpdateMask({ feather: 0.2 })}
+          onDoubleClick={() => onUpdateMask({ feather: DEFAULT_LINEAR_MASK_FEATHER })}
         />
       </div>
 
