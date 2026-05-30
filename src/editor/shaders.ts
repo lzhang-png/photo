@@ -22,7 +22,8 @@ uniform float u_highlights;
 uniform float u_shadows;
 uniform float u_whites;
 uniform float u_blacks;
-uniform mat3  u_wbMatrix;     // Bradford CAT, sRGB-linear -> sRGB-linear
+uniform float u_temperature;
+uniform float u_tint;
 uniform float u_vibrance;
 uniform float u_saturation;
 uniform float u_definition;
@@ -48,6 +49,13 @@ uniform vec2 u_outSize;       // inscribed output size in pixels (no black corne
 uniform float u_angle;        // rotation radians (CW)
 uniform float u_cropPreview;  // 1 = full image + dimmed crop guide
 uniform vec4 u_cropOutRect;     // minU, minV, maxU, maxV in output UV (upright crop)
+
+uniform int u_maskCount;
+uniform vec4 u_maskLine[4];       // p0.xy, p1.xy in source UV
+uniform float u_maskFeather[4];
+uniform vec4 u_maskTone[4];       // exposure, contrast, highlights, shadows
+uniform vec2 u_maskWhitesBlacks[4]; // whites, blacks
+uniform vec4 u_maskColor[4];        // temperature, tint, vibrance, saturation
 
 // ------------------------------------------------------------------
 // sRGB <-> linear (piecewise, IEC 61966-2-1)
@@ -541,10 +549,66 @@ vec2 mapOutputUV(vec2 uv) {
   return texUV;
 }
 
+// Linear gradient mask weight in source UV space (y from visual top).
+// A (p0, t=0) → 1, B (p1, t=1) → 0; feather softens the falloff near B.
+float linearGradientWeight(vec4 line, float feather, vec2 pt) {
+  vec2 p0 = line.xy;
+  vec2 p1 = line.zw;
+  vec2 axis = p1 - p0;
+  float len2 = dot(axis, axis);
+  if (len2 < 1e-8) return 0.0;
+  float t = dot(pt - p0, axis) / len2;
+  float f = clamp(feather, 0.02, 0.5);
+  return clamp(1.0 - smoothstep(1.0 - f, 1.0, t), 0.0, 1.0);
+}
+
+void accumulateMaskDeltas(vec2 texUV, out float mExp, out float mCon, out float mHi,
+    out float mSh, out float mWh, out float mBl, out float mTemp, out float mTint,
+    out float mVib, out float mSat) {
+  mExp = 0.0; mCon = 0.0; mHi = 0.0; mSh = 0.0;
+  mWh = 0.0; mBl = 0.0; mTemp = 0.0; mTint = 0.0; mVib = 0.0; mSat = 0.0;
+  for (int i = 0; i < 4; i++) {
+    if (i >= u_maskCount) break;
+    float w = linearGradientWeight(u_maskLine[i], u_maskFeather[i], texUV);
+    mExp += w * u_maskTone[i].x;
+    mCon += w * u_maskTone[i].y;
+    mHi  += w * u_maskTone[i].z;
+    mSh  += w * u_maskTone[i].w;
+    mWh  += w * u_maskWhitesBlacks[i].x;
+    mBl  += w * u_maskWhitesBlacks[i].y;
+    mTemp += w * u_maskColor[i].x;
+    mTint += w * u_maskColor[i].y;
+    mVib += w * u_maskColor[i].z;
+    mSat += w * u_maskColor[i].w;
+  }
+}
+
+// Bradford CAT in linear sRGB — matches CPU wbMatrix().
+mat3 buildWbMatrix(float temperature, float tint) {
+  if (abs(temperature) < 1e-5 && abs(tint) < 1e-5) {
+    return mat3(1.0);
+  }
+  float gL = 1.0 + temperature * 0.5;
+  float gM = 1.0 - tint * 0.3;
+  float gS = 1.0 - temperature * 0.5;
+  // Scale rows of rgb→LMS, stored column-major for GLSL mat3.
+  mat3 rgbToLms = mat3(
+    vec3(0.359267 * gL, -0.336248 * gM, 0.020483 * gS),
+    vec3(0.311062 * gL,  0.766284 * gM, -0.071244 * gS),
+    vec3(0.156942 * gL,  0.016028 * gM,  1.066485 * gS)
+  );
+  mat3 lmsToRgb = mat3(
+    vec3(2.822770,  1.256130,  0.015192),
+    vec3(1.037498, -0.685736,  0.088416),
+    vec3(0.075098,  0.004880,  0.922133)
+  );
+  return lmsToRgb * rgbToLms;
+}
+
 // Decode a source sample to linear-light sRGB with white balance + exposure.
 vec3 developSample(vec3 sampled) {
   vec3 c = (u_inputLinear > 0.5) ? sampled : srgb_to_linear(sampled);
-  c = u_wbMatrix * c;
+  c = buildWbMatrix(u_temperature, u_tint) * c;
   c *= pow(2.0, u_exposure);
   return c;
 }
@@ -635,11 +699,25 @@ void main() {
   vec3 sampled = texture(u_image, uv).rgb;
   vec3 c = (u_inputLinear > 0.5) ? sampled : srgb_to_linear(sampled);
 
+  float mExp, mCon, mHi, mSh, mWh, mBl, mTemp, mTint, mVib, mSat;
+  accumulateMaskDeltas(uv, mExp, mCon, mHi, mSh, mWh, mBl, mTemp, mTint, mVib, mSat);
+
+  float effExposure = u_exposure + mExp;
+  float effContrast = u_contrast + mCon;
+  float effHighlights = u_highlights + mHi;
+  float effShadows = u_shadows + mSh;
+  float effWhites = u_whites + mWh;
+  float effBlacks = u_blacks + mBl;
+  float effTemp = u_temperature + mTemp;
+  float effTint = u_tint + mTint;
+  float effVibrance = u_vibrance + mVib;
+  float effSaturation = u_saturation + mSat;
+
   // -------- 2. White balance (Bradford CAT in linear sRGB) --------
-  c = u_wbMatrix * c;
+  c = buildWbMatrix(effTemp, effTint) * c;
 
   // -------- 3. Exposure (linear-light gain in stops) --------
-  c *= pow(2.0, u_exposure);
+  c *= pow(2.0, effExposure);
 
   // -------- 4. Highlights / shadows on luminance, preserve chroma --------
   float Y = max(luma_linear(c), 1e-5);
@@ -649,30 +727,28 @@ void main() {
   float hPivot = 0.5;
   float over = max(Y - hPivot, 0.0);
   float Yh;
-  if (u_highlights < 0.0) {
-    float k = -u_highlights * 4.0;
+  if (effHighlights < 0.0) {
+    float k = -effHighlights * 4.0;
     Yh = Y - over * (1.0 - 1.0 / (1.0 + k * over));
   } else {
-    Yh = Y + over * u_highlights * 0.6;
+    Yh = Y + over * effHighlights * 0.6;
   }
 
   // Shadows: gamma lift/crush masked to dark range. Symmetric in log-space.
   float sMask = exp(-Yh * 5.0);
-  float gamma = exp(-u_shadows * 1.2);
+  float gamma = exp(-effShadows * 1.2);
   float Ys = mix(Yh, pow(max(Yh, 1e-5), gamma), sMask);
 
   c *= Ys / Y;
 
   // -------- 5. Whites / Blacks: endpoint remap --------
-  // Positive whites pushes the white point DOWN (image brightens at top).
-  // Positive blacks pushes the black point DOWN (shadows lift toward gray).
-  float W = 1.0 - u_whites * 0.5;
-  float B = -u_blacks * 0.1;
+  float W = 1.0 - effWhites * 0.5;
+  float B = -effBlacks * 0.1;
   c = (c - B) / max(W - B, 1e-4);
 
   // -------- 6. Contrast: luma-preserving log-space S-curve around 18% gray --------
   float Yc  = max(luma_linear(c), 1e-5);
-  float kCon = exp(u_contrast * 0.8);
+  float kCon = exp(effContrast * 0.8);
   float Yc2 = 0.18 * exp2(log2(Yc / 0.18) * kCon);
   c *= Yc2 / Yc;
 
@@ -687,8 +763,8 @@ void main() {
   // -------- 8. Saturation / Vibrance in OKLab --------
   vec3 lab = linear_to_oklab(c);
   float chroma = length(lab.yz);
-  float satFactor = 1.0 + u_saturation;
-  float vibFactor = 1.0 + u_vibrance * clamp(1.0 - chroma * 3.0, 0.0, 1.0);
+  float satFactor = 1.0 + effSaturation;
+  float vibFactor = 1.0 + effVibrance * clamp(1.0 - chroma * 3.0, 0.0, 1.0);
   lab.yz *= satFactor * vibFactor;
   c = oklab_to_linear(lab);
 

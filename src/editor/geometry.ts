@@ -368,6 +368,34 @@ export function screenToOutputUV(
   return { u: sx / viewW, v: 1 - sy / viewH };
 }
 
+/** Screen coords (y down) → source norm (y from visual top). */
+export function screenToSourceNorm(
+  sx: number,
+  sy: number,
+  srcW: number,
+  srcH: number,
+  angleRad: number,
+  viewW: number,
+  viewH: number,
+): { x: number; y: number } {
+  const { u, v } = screenToOutputUV(sx, sy, viewW, viewH);
+  return outputUVToSourceNorm(u, v, srcW, srcH, angleRad);
+}
+
+/** Source norm → screen coords in letterboxed preview frame. */
+export function sourceNormToScreen(
+  nx: number,
+  ny: number,
+  srcW: number,
+  srcH: number,
+  angleRad: number,
+  viewW: number,
+  viewH: number,
+): { x: number; y: number } {
+  const { u, v } = sourceNormToOutputUV(nx, ny, srcW, srcH, angleRad);
+  return outputUVToScreen(u, v, viewW, viewH);
+}
+
 export type OutputRect = {
   minU: number;
   minV: number;
@@ -686,6 +714,16 @@ function fitAspectInInscribed(
   };
 }
 
+/** Width / height of the full source image in output space (accounts for quarter-turns). */
+export function fullFramePhotoAspect(
+  srcW: number,
+  srcH: number,
+  g: Geometry,
+): number {
+  const quarterTurns = ((g.rotate90 % 4) + 4) % 4;
+  return quarterTurns % 2 === 1 ? srcH / srcW : srcW / srcH;
+}
+
 /** Pixel size of the rendered / exported frame after crop + rotation. */
 export function getOutputSize(
   srcW: number,
@@ -699,10 +737,16 @@ export function getOutputSize(
   if (g.aspectLocked) {
     return fitAspectInInscribed(inscribed, g.lockedAspect);
   }
-  // Full-image level: keep the original photo aspect instead of the
-  // inscribed rect (which widens as the image is straightened).
   if (g.cropW >= 0.999 && g.cropH >= 0.999) {
-    return fitAspectInInscribed(inscribed, srcW / srcH);
+    // Quarter-turn with no level: show the full rotated frame.
+    if (Math.abs(g.straighten) < 1e-6) {
+      return inscribed;
+    }
+    // Level only: keep photo aspect (including swap after 90° / 270° turns).
+    return fitAspectInInscribed(
+      inscribed,
+      fullFramePhotoAspect(srcW, srcH, g),
+    );
   }
   return inscribed;
 }

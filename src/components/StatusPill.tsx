@@ -8,6 +8,11 @@ export function isStatusLoading(status: string): boolean {
   return status.endsWith("…");
 }
 
+export function isPhotoLoadingStatus(status: string | null): boolean {
+  if (!status || !isStatusLoading(status)) return false;
+  return /^(Decoding|Reprocessing RAW)/.test(status);
+}
+
 export function StatusPill({
   status,
   progress,
@@ -21,7 +26,7 @@ export function StatusPill({
   return (
     <div
       className={cn(
-        "flex w-full max-w-[min(100%,36rem)] min-w-0 flex-col items-stretch gap-1.5 text-sm",
+        "flex h-full w-full min-w-0 flex-col justify-center gap-1.5 text-sm",
         showBar && "w-full",
       )}
       role="status"

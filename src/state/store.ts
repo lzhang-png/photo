@@ -46,6 +46,32 @@ import {
   normalizeSocialTemplate,
   type SocialTemplate,
 } from "../editor/socialTemplate";
+import {
+  createNamedPreset,
+  loadNamedPresets,
+  saveNamedPresets,
+  type NamedPreset,
+} from "../editor/presets";
+import {
+  createLinearGradientMask,
+  type LinearGradientMask,
+  type MaskId,
+  type ToneMaskDeltas,
+  type ColorMaskDeltas,
+} from "../editor/masks";
+import {
+  canRedoPhoto,
+  canUndoPhoto,
+  clearAllEditHistory,
+  clearPhotoHistory,
+  flushEditHistory,
+  recordEditHistory,
+  redoPhoto,
+  setHistoryChangeListener,
+  snapshotFromPhoto,
+  undoPhoto,
+  type PhotoEditSnapshot,
+} from "../editor/editHistory";
 
 export type PhotoRecord = {
   id: PhotoId;
@@ -67,8 +93,13 @@ type EditorState = {
   status: string | null;
   decodeProgress: DecodeProgress | null;
   cropEditing: boolean;
+  maskEditing: boolean;
+  activeMaskId: MaskId | null;
   showHistogram: boolean;
+  showMaskOverlay: boolean;
   editSettingsClipboard: EditSettings | null;
+  namedPresets: NamedPreset[];
+  historyVersion: number;
   restoringFiles: boolean;
   sourceDirectoryName: string | null;
 
@@ -95,11 +126,31 @@ type EditorState = {
   resetRawSettings: () => void;
   copyEditSettings: () => void;
   pasteEditSettings: () => void;
+  saveNamedPreset: (name: string) => string | null;
+  applyNamedPreset: (id: string) => void;
+  deleteNamedPreset: (id: string) => void;
+  undo: () => void;
+  redo: () => void;
   setStatus: (msg: string | null) => void;
   setDecodeProgress: (progress: DecodeProgress | null) => void;
   setCropEditing: (editing: boolean) => void;
+  setMaskEditing: (editing: boolean) => void;
+  setActiveMaskId: (id: MaskId | null) => void;
+  addLinearMask: () => MaskId | null;
+  removeLinearMask: (id: MaskId) => void;
+  updateLinearMask: (id: MaskId, patch: Partial<LinearGradientMask>) => void;
+  setLinearMaskAdjustment: (
+    id: MaskId,
+    scope: "light" | "color",
+    key: keyof ToneMaskDeltas | keyof ColorMaskDeltas,
+    value: number,
+  ) => void;
+  beginLinearMaskEdit: () => void;
+  commitLinearMaskEdit: () => void;
   toggleHistogram: () => void;
   setShowHistogram: (visible: boolean) => void;
+  toggleShowMaskOverlay: () => void;
+  setShowMaskOverlay: (visible: boolean) => void;
   clearCatalog: () => void;
   restoreCachedFiles: () => Promise<void>;
   importPhotoFiles: (files: File[]) => Promise<void>;
@@ -140,6 +191,37 @@ function buildInitialCatalog(): Pick<
 }
 
 let persistTimer: ReturnType<typeof setTimeout> | null = null;
+let statusClearTimer: ReturnType<typeof setTimeout> | null = null;
+
+const STATUS_AUTO_CLEAR_MS = 2500;
+
+function isPersistentStatus(status: string): boolean {
+  if (status.endsWith("…")) return true;
+  if (/^\d+ × \d+$/.test(status)) return true;
+  return false;
+}
+
+function commitStatus(
+  set: (
+    partial: Partial<EditorState> | ((state: EditorState) => Partial<EditorState>),
+  ) => void,
+  get: () => EditorState,
+  status: string | null,
+) {
+  if (statusClearTimer) {
+    clearTimeout(statusClearTimer);
+    statusClearTimer = null;
+  }
+  set({ status });
+  if (status && !isPersistentStatus(status)) {
+    statusClearTimer = setTimeout(() => {
+      statusClearTimer = null;
+      if (get().status === status) {
+        set({ status: null });
+      }
+    }, STATUS_AUTO_CLEAR_MS);
+  }
+}
 
 function schedulePersist(getState: () => EditorState) {
   if (persistTimer) clearTimeout(persistTimer);
@@ -199,14 +281,56 @@ function updateActive(
 
 const initialCatalog = buildInitialCatalog();
 const initialPrefs = loadUiPrefs();
+const initialPresets = loadNamedPresets();
 
-export const useEditor = create<EditorState>((set, get) => ({
+function commitNamedPresets(presets: NamedPreset[]) {
+  saveNamedPresets(presets);
+  return presets;
+}
+
+function recordHistoryBeforeEdit(getState: () => EditorState) {
+  const active = getActive(getState());
+  if (!active) return;
+  recordEditHistory(active.id, snapshotFromPhoto(active));
+}
+
+function applyPhotoSnapshot(
+  state: EditorState,
+  photoId: PhotoId,
+  snapshot: PhotoEditSnapshot,
+): Partial<EditorState> {
+  const photo = state.photos[photoId];
+  if (!photo) return {};
+  return {
+    photos: {
+      ...state.photos,
+      [photoId]: {
+        ...photo,
+        adjustments: cloneAdjustments(snapshot.adjustments),
+        rawSettings: cloneRawSettings(snapshot.rawSettings),
+        socialTemplate: cloneSocialTemplate(snapshot.socialTemplate),
+      },
+    },
+  };
+}
+
+export const useEditor = create<EditorState>((set, get) => {
+  setHistoryChangeListener(() => {
+    set((s) => ({ historyVersion: s.historyVersion + 1 }));
+  });
+
+  return {
   ...initialCatalog,
   status: null,
   decodeProgress: null,
   cropEditing: false,
+  maskEditing: false,
+  activeMaskId: null,
   showHistogram: initialPrefs.showHistogram,
+  showMaskOverlay: initialPrefs.showMaskOverlay,
   editSettingsClipboard: null,
+  namedPresets: initialPresets,
+  historyVersion: 0,
   restoringFiles: false,
   sourceDirectoryName: initialPrefs.sourceDirectoryName,
 
@@ -261,7 +385,14 @@ export const useEditor = create<EditorState>((set, get) => ({
 
   setActivePhoto: (id) => {
     if (!get().photos[id]) return;
-    set({ cropEditing: false, activePhotoId: id });
+    const prevId = get().activePhotoId;
+    if (prevId) flushEditHistory(prevId);
+    set({
+      cropEditing: false,
+      maskEditing: false,
+      activeMaskId: null,
+      activePhotoId: id,
+    });
     schedulePersist(get);
   },
 
@@ -277,6 +408,7 @@ export const useEditor = create<EditorState>((set, get) => ({
       }
       return { photos: rest, photoOrder, activePhotoId };
     });
+    clearPhotoHistory(id);
     schedulePersist(get);
     void deleteCachedSourceFile(id).catch(() => {});
   },
@@ -291,6 +423,7 @@ export const useEditor = create<EditorState>((set, get) => ({
   },
 
   setAdjustment: (key, value) => {
+    recordHistoryBeforeEdit(get);
     set((s) => {
       const active = getActive(s);
       if (!active) return {};
@@ -302,6 +435,7 @@ export const useEditor = create<EditorState>((set, get) => ({
   },
 
   setGeometry: (patch) => {
+    recordHistoryBeforeEdit(get);
     set((s) => {
       const active = getActive(s);
       if (!active) return {};
@@ -341,6 +475,7 @@ export const useEditor = create<EditorState>((set, get) => ({
   },
 
   setSocialTemplate: (patch) => {
+    recordHistoryBeforeEdit(get);
     set((s) => {
       const active = getActive(s);
       if (!active) return {};
@@ -355,6 +490,7 @@ export const useEditor = create<EditorState>((set, get) => ({
   },
 
   setRawSetting: (key, value) => {
+    recordHistoryBeforeEdit(get);
     set((s) => {
       const active = getActive(s);
       if (!active) return {};
@@ -366,6 +502,7 @@ export const useEditor = create<EditorState>((set, get) => ({
   },
 
   resetAdjustments: () => {
+    recordHistoryBeforeEdit(get);
     set((s) =>
       updateActive(s, {
         adjustments: cloneAdjustments(DEFAULT_ADJUSTMENTS),
@@ -375,6 +512,7 @@ export const useEditor = create<EditorState>((set, get) => ({
   },
 
   resetRawSettings: () => {
+    recordHistoryBeforeEdit(get);
     set((s) =>
       updateActive(s, {
         rawSettings: cloneRawSettings(DEFAULT_RAW_SETTINGS),
@@ -387,27 +525,187 @@ export const useEditor = create<EditorState>((set, get) => ({
     const active = getActive(get());
     if (!active) return;
     set({ editSettingsClipboard: extractEditSettings(active.adjustments) });
-    set({ status: "Copied edit settings" });
+    commitStatus(set, get, "Copied edit settings");
   },
 
   pasteEditSettings: () => {
     const clipboard = get().editSettingsClipboard;
     const active = getActive(get());
     if (!clipboard || !active) return;
+    recordHistoryBeforeEdit(get);
     set((s) =>
       updateActive(s, {
         adjustments: applyEditSettings(active.adjustments, clipboard),
       }),
     );
     schedulePersist(get);
-    set({ status: "Pasted edit settings" });
+    commitStatus(set, get, "Pasted edit settings");
   },
 
-  setStatus: (status) => set({ status }),
+  saveNamedPreset: (name) => {
+    const trimmed = name.trim();
+    const active = getActive(get());
+    if (!trimmed || !active) return null;
+    const preset = createNamedPreset(trimmed, extractEditSettings(active.adjustments));
+    const namedPresets = commitNamedPresets([preset, ...get().namedPresets]);
+    set({ namedPresets });
+    commitStatus(set, get, `Saved preset “${trimmed}”`);
+    return preset.id;
+  },
+
+  applyNamedPreset: (id) => {
+    const preset = get().namedPresets.find((p) => p.id === id);
+    const active = getActive(get());
+    if (!preset || !active) return;
+    recordHistoryBeforeEdit(get);
+    set((s) =>
+      updateActive(s, {
+        adjustments: applyEditSettings(active.adjustments, preset.edits),
+      }),
+    );
+    schedulePersist(get);
+    commitStatus(set, get, `Applied preset “${preset.name}”`);
+  },
+
+  deleteNamedPreset: (id) => {
+    const preset = get().namedPresets.find((p) => p.id === id);
+    if (!preset) return;
+    const namedPresets = commitNamedPresets(
+      get().namedPresets.filter((p) => p.id !== id),
+    );
+    set({ namedPresets });
+    commitStatus(set, get, `Deleted preset “${preset.name}”`);
+  },
+
+  undo: () => {
+    const s = get();
+    const active = getActive(s);
+    if (!active) return;
+    const snapshot = undoPhoto(active.id, snapshotFromPhoto(active));
+    if (!snapshot) return;
+    set(applyPhotoSnapshot(s, active.id, snapshot));
+    schedulePersist(get);
+  },
+
+  redo: () => {
+    const s = get();
+    const active = getActive(s);
+    if (!active) return;
+    const snapshot = redoPhoto(active.id, snapshotFromPhoto(active));
+    if (!snapshot) return;
+    set(applyPhotoSnapshot(s, active.id, snapshot));
+    schedulePersist(get);
+  },
+
+  setStatus: (status) => commitStatus(set, get, status),
 
   setDecodeProgress: (decodeProgress) => set({ decodeProgress }),
 
-  setCropEditing: (cropEditing) => set({ cropEditing }),
+  setCropEditing: (cropEditing) =>
+    set(
+      cropEditing
+        ? { cropEditing: true, maskEditing: false }
+        : { cropEditing: false },
+    ),
+
+  setMaskEditing: (maskEditing) =>
+    set(
+      maskEditing
+        ? { maskEditing: true, cropEditing: false, showMaskOverlay: true }
+        : { maskEditing: false },
+    ),
+
+  setActiveMaskId: (activeMaskId) => set({ activeMaskId }),
+
+  addLinearMask: () => {
+    const active = getActive(get());
+    if (!active) return null;
+    recordHistoryBeforeEdit(get);
+    const mask = createLinearGradientMask(
+      `Linear ${active.adjustments.linearMasks.length + 1}`,
+    );
+    set((s) => {
+      const a = getActive(s);
+      if (!a) return {};
+      return updateActive(s, {
+        adjustments: {
+          ...a.adjustments,
+          linearMasks: [...a.adjustments.linearMasks, mask],
+        },
+      });
+    });
+    set({ activeMaskId: mask.id, maskEditing: true, showMaskOverlay: true });
+    schedulePersist(get);
+    return mask.id;
+  },
+
+  removeLinearMask: (id) => {
+    recordHistoryBeforeEdit(get);
+    set((s) => {
+      const active = getActive(s);
+      if (!active) return {};
+      const linearMasks = active.adjustments.linearMasks.filter((m) => m.id !== id);
+      return updateActive(s, {
+        adjustments: { ...active.adjustments, linearMasks },
+      });
+    });
+    const state = get();
+    if (state.activeMaskId === id) {
+      const active = getActive(state);
+      set({
+        activeMaskId: active?.adjustments.linearMasks[0]?.id ?? null,
+        maskEditing: false,
+      });
+    }
+    schedulePersist(get);
+  },
+
+  updateLinearMask: (id, patch) => {
+    set((s) => {
+      const active = getActive(s);
+      if (!active) return {};
+      const linearMasks = active.adjustments.linearMasks.map((m) =>
+        m.id === id ? { ...m, ...patch, p0: patch.p0 ?? m.p0, p1: patch.p1 ?? m.p1 } : m,
+      );
+      return updateActive(s, {
+        adjustments: { ...active.adjustments, linearMasks },
+      });
+    });
+    schedulePersist(get);
+  },
+
+  beginLinearMaskEdit: () => {
+    recordHistoryBeforeEdit(get);
+  },
+
+  commitLinearMaskEdit: () => {
+    schedulePersist(get);
+  },
+
+  setLinearMaskAdjustment: (id, scope, key, value) => {
+    recordHistoryBeforeEdit(get);
+    set((s) => {
+      const active = getActive(s);
+      if (!active) return {};
+      const linearMasks = active.adjustments.linearMasks.map((m) => {
+        if (m.id !== id) return m;
+        if (scope === "light") {
+          return {
+            ...m,
+            light: { ...m.light, [key]: value },
+          };
+        }
+        return {
+          ...m,
+          color: { ...m.color, [key]: value },
+        };
+      });
+      return updateActive(s, {
+        adjustments: { ...active.adjustments, linearMasks },
+      });
+    });
+    schedulePersist(get);
+  },
 
   toggleHistogram: () => {
     const next = !get().showHistogram;
@@ -420,6 +718,23 @@ export const useEditor = create<EditorState>((set, get) => ({
     saveUiPrefs({ showHistogram: visible });
   },
 
+  toggleShowMaskOverlay: () => {
+    const next = !get().showMaskOverlay;
+    set((s) => ({
+      showMaskOverlay: next,
+      maskEditing: next ? s.maskEditing : false,
+    }));
+    saveUiPrefs({ showMaskOverlay: next });
+  },
+
+  setShowMaskOverlay: (visible) => {
+    set((s) => ({
+      showMaskOverlay: visible,
+      maskEditing: visible ? s.maskEditing : false,
+    }));
+    saveUiPrefs({ showMaskOverlay: visible });
+  },
+
   clearCatalog: () => {
     set({
       photos: {},
@@ -429,6 +744,7 @@ export const useEditor = create<EditorState>((set, get) => ({
       editSettingsClipboard: null,
       sourceDirectoryName: null,
     });
+    clearAllEditHistory();
     localStorage.removeItem(STORAGE_KEY);
     saveUiPrefs({ sourceDirectoryName: null });
     void clearSourceFileCache().catch(() => {});
@@ -457,10 +773,12 @@ export const useEditor = create<EditorState>((set, get) => ({
       );
 
       if (restored > 0) {
-        set({
-          photos,
-          status: restored === 1 ? "Restored 1 photo" : `Restored ${restored} photos`,
-        });
+        set({ photos });
+        commitStatus(
+          set,
+          get,
+          restored === 1 ? "Restored 1 photo" : `Restored ${restored} photos`,
+        );
       }
     } catch {
       // IndexedDB unavailable — user can still re-open manually.
@@ -473,7 +791,7 @@ export const useEditor = create<EditorState>((set, get) => ({
     await importPhotoFilesImpl(files, {
       addPhoto: (image, file, isRaw, makeActive) =>
         get().addPhoto(image, file, isRaw, makeActive),
-      setStatus: (msg) => set({ status: msg }),
+      setStatus: (msg) => get().setStatus(msg),
       setDecodeProgress: (progress) => set({ decodeProgress: progress }),
     });
   },
@@ -484,7 +802,7 @@ export const useEditor = create<EditorState>((set, get) => ({
     if (missing.length === 0) return;
 
     if (!supportsDirectoryPicker()) {
-      set({ status: "Use Open… to re-select your photo files" });
+      commitStatus(set, get, "Use Open… to re-select your photo files");
       return;
     }
 
@@ -520,24 +838,26 @@ export const useEditor = create<EditorState>((set, get) => ({
       }
 
       if (restored === 0) {
-        set({ status: `No saved photos found in ${handle.name}` });
+        commitStatus(set, get, `No saved photos found in ${handle.name}`);
         return;
       }
 
-      set({
-        photos,
-        status:
-          restored === 1
-            ? `Re-opened 1 photo from ${handle.name}`
-            : `Re-opened ${restored} photos from ${handle.name}`,
-      });
+      set({ photos });
+      commitStatus(
+        set,
+        get,
+        restored === 1
+          ? `Re-opened 1 photo from ${handle.name}`
+          : `Re-opened ${restored} photos from ${handle.name}`,
+      );
     } catch (err) {
-      set({ status: `Re-open failed: ${(err as Error).message}` });
+      commitStatus(set, get, `Re-open failed: ${(err as Error).message}`);
     } finally {
       set({ restoringFiles: false });
     }
   },
-}));
+  };
+});
 
 // Selectors for active photo fields
 export function selectActivePhoto(s: EditorState): PhotoRecord | null {
@@ -577,4 +897,14 @@ export function selectNeedsReopen(s: EditorState): boolean {
     s.photoOrder.length > 0 &&
     s.photoOrder.some((id) => !s.photos[id]?.sourceFile)
   );
+}
+
+export function selectCanUndo(s: EditorState): boolean {
+  void s.historyVersion;
+  return canUndoPhoto(s.activePhotoId);
+}
+
+export function selectCanRedo(s: EditorState): boolean {
+  void s.historyVersion;
+  return canRedoPhoto(s.activePhotoId);
 }

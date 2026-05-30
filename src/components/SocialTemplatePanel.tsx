@@ -14,6 +14,7 @@ import {
 } from "../state/store";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { SidebarSection } from "./SidebarSection";
 import { cn } from "@/lib/utils";
 import { useState } from "react";
@@ -93,28 +94,25 @@ export function SocialTemplatePanel() {
           <>
             <div className="space-y-2">
               <Label className="font-normal">Background</Label>
-              <div className="grid grid-cols-2 gap-2">
-                <Button
-                  type="button"
-                  variant={social.background === "white" ? "default" : "outline"}
-                  className="h-9 gap-2"
-                  disabled={disabled}
-                  onClick={() => setBackground("white")}
-                >
+              <ToggleGroup
+                variant="outline"
+                className="grid w-full grid-cols-2 gap-2"
+                value={[social.background]}
+                disabled={disabled}
+                onValueChange={(value) => {
+                  const next = value[0];
+                  if (next === "white" || next === "black") setBackground(next);
+                }}
+              >
+                <ToggleGroupItem value="white" className="h-9 gap-2">
                   <ColorCube color="white" />
                   White
-                </Button>
-                <Button
-                  type="button"
-                  variant={social.background === "black" ? "default" : "outline"}
-                  className="h-9 gap-2"
-                  disabled={disabled}
-                  onClick={() => setBackground("black")}
-                >
+                </ToggleGroupItem>
+                <ToggleGroupItem value="black" className="h-9 gap-2">
                   <ColorCube color="black" />
                   Black
-                </Button>
-              </div>
+                </ToggleGroupItem>
+              </ToggleGroup>
             </div>
 
             <Button

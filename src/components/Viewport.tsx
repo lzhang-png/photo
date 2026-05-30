@@ -1,5 +1,5 @@
 import { BarChart3, Eye, Minus, Plus, RotateCcw } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { DEFAULT_ADJUSTMENTS, originalPreviewAdjustments } from "../editor/adjustments";
 import {
   beginTransformSession,
@@ -19,6 +19,7 @@ import {
 } from "../editor/socialTemplate";
 import { type ImageFrame } from "../editor/viewLayout";
 import { Button } from "@/components/ui/button";
+import { Separator } from "@/components/ui/separator";
 import { decode } from "../editor/decode";
 import { supportsDirectoryPicker } from "../editor/fileAccess";
 import { createBatchProgressReporter } from "../editor/decodeProgress";
@@ -35,6 +36,7 @@ import {
 import { cn } from "@/lib/utils";
 import { Histogram } from "./Histogram";
 import { CropOverlay } from "./CropOverlay";
+import { GradientMaskOverlay } from "./GradientMaskOverlay";
 
 const RAW_REDECODE_MS = 400;
 const ZOOM_MIN = 1;
@@ -99,6 +101,10 @@ function framesEqual(a: ImageFrame | null, b: ImageFrame | null) {
   return a.ox === b.ox && a.oy === b.oy && a.dw === b.dw && a.dh === b.dh;
 }
 
+function isValidFrame(frame: ImageFrame | null): frame is ImageFrame {
+  return !!frame && frame.dw >= 1 && frame.dh >= 1;
+}
+
 export function Viewport() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
@@ -120,6 +126,7 @@ export function Viewport() {
   const zoomRef = useRef(1);
   const panRef = useRef<Pan>({ x: 0, y: 0 });
   const wheelZoomTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const maskOverlayContainerRef = useRef<HTMLDivElement>(null);
 
   const [dragging, setDragging] = useState(false);
   const [compareOriginal, setCompareOriginal] = useState(false);
@@ -127,15 +134,26 @@ export function Viewport() {
   const [pan, setPan] = useState<Pan>({ x: 0, y: 0 });
   const [isPanning, setIsPanning] = useState(false);
   const [wheelZooming, setWheelZooming] = useState(false);
-  const [imageFrame, setImageFrame] = useState<ImageFrame | null>(null);
+  const [viewportSize, setViewportSize] = useState({ w: 0, h: 0 });
   const [socialLayout, setSocialLayout] = useState<SocialTemplateLayout | null>(
     null,
   );
   const [histogramTick, setHistogramTick] = useState(0);
 
   const cropPreview = useEditor((s) => s.cropEditing);
+  const maskEditing = useEditor((s) => s.maskEditing);
+  const activeMaskId = useEditor((s) => s.activeMaskId);
+  const linearMasks = useEditor((s) =>
+    s.activePhotoId ? s.photos[s.activePhotoId]?.adjustments.linearMasks ?? [] : [],
+  );
+  const beginLinearMaskEdit = useEditor((s) => s.beginLinearMaskEdit);
+  const commitLinearMaskEdit = useEditor((s) => s.commitLinearMaskEdit);
+  const updateLinearMask = useEditor((s) => s.updateLinearMask);
+  const setActiveMaskId = useEditor((s) => s.setActiveMaskId);
+  const setMaskEditing = useEditor((s) => s.setMaskEditing);
   const socialTemplate = useEditor(selectSocialTemplate);
   const showHistogram = useEditor((s) => s.showHistogram);
+  const showMaskOverlayVisible = useEditor((s) => s.showMaskOverlay);
   const toggleHistogram = useEditor((s) => s.toggleHistogram);
   const geometry = useEditor((s) =>
     s.activePhotoId ? s.photos[s.activePhotoId]?.adjustments.geometry : undefined,
@@ -172,7 +190,7 @@ export function Viewport() {
 
   useEffect(() => {
     const el = viewportRef.current;
-    if (!el || !image || cropPreview || socialTemplate.enabled) return;
+    if (!el || !image || cropPreview || maskEditing || socialTemplate.enabled) return;
 
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
@@ -203,12 +221,11 @@ export function Viewport() {
 
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => el.removeEventListener("wheel", onWheel);
-  }, [image, cropPreview, socialTemplate.enabled]);
+  }, [image, cropPreview, maskEditing, socialTemplate.enabled]);
 
   const setImageFrameIfChanged = useCallback((frame: ImageFrame | null) => {
     if (framesEqual(imageFrameRef.current, frame)) return;
     imageFrameRef.current = frame;
-    setImageFrame(frame);
   }, []);
 
   const paintFrame = useCallback(
@@ -216,31 +233,39 @@ export function Viewport() {
       const pipe = pipelineRef.current;
       const el = viewportRef.current;
       if (!pipe || !el) return;
+      if (el.clientWidth < 1 || el.clientHeight < 1) {
+        requestAnimationFrame(() => paintFrameRef.current(preview));
+        return;
+      }
 
-      if (!image) {
+      const img = selectImage(useEditor.getState());
+      if (!img) {
         setSocialLayout(null);
-        setImageFrameIfChanged(null);
+        imageFrameRef.current = null;
         pipe.clearImage();
         pipe.fitToContainer();
         pipe.render(DEFAULT_ADJUSTMENTS, false);
         return;
       }
 
+      pipe.setImage(img);
+
       const previewMode = preview ?? useEditor.getState().cropEditing;
+      const social = selectSocialTemplate(useEditor.getState());
 
       const baseAdj = selectAdjustments(useEditor.getState());
       const renderAdj = compareOriginalRef.current
         ? originalPreviewAdjustments(baseAdj)
         : baseAdj;
-      const liveGeometry = getSessionRenderGeometry(renderAdj.geometry);
-      const renderGeometry = { ...renderAdj, geometry: liveGeometry };
+      const liveGeom = getSessionRenderGeometry(renderAdj.geometry);
+      const renderGeometry = { ...renderAdj, geometry: liveGeom };
       const photoSize = getOutputSize(
-        image.width,
-        image.height,
-        liveGeometry,
+        img.width,
+        img.height,
+        liveGeom,
       );
 
-      if (socialTemplate.enabled && !previewMode) {
+      if (social.enabled && !previewMode) {
         const layout = layoutSocialTemplatePreview(
           el.clientWidth,
           el.clientHeight,
@@ -248,27 +273,33 @@ export function Viewport() {
           photoSize.height,
         );
         setSocialLayout(layout);
-        setImageFrameIfChanged(null);
+        imageFrameRef.current = null;
       } else {
         setSocialLayout(null);
         const frame = computePreviewFrame(
           el.clientWidth,
           el.clientHeight,
-          image.width,
-          image.height,
-          liveGeometry,
+          img.width,
+          img.height,
+          liveGeom,
           previewMode,
         );
-        setImageFrameIfChanged(frame);
+        if (isValidFrame(frame)) {
+          setImageFrameIfChanged(frame);
+        }
         if (previewMode && isTransformSessionActive()) {
-          syncSessionAfterFrame(frame, liveGeometry);
+          syncSessionAfterFrame(frame, liveGeom);
         }
       }
 
-      pipe.fitToContainer(renderGeometry, previewMode);
-      pipe.render(renderGeometry, previewMode);
+      try {
+        pipe.fitToContainer(renderGeometry, previewMode);
+        pipe.render(renderGeometry, previewMode);
+      } catch (err) {
+        setStatus(`Render failed: ${(err as Error).message}`);
+      }
     },
-    [image, setImageFrameIfChanged, socialTemplate.enabled],
+    [setImageFrameIfChanged, setStatus],
   );
 
   useEffect(() => {
@@ -336,13 +367,28 @@ export function Viewport() {
     scheduleTransformRender();
   }, []);
 
+  const paintFrameRef = useRef(paintFrame);
+  paintFrameRef.current = paintFrame;
+
   useEffect(() => {
     if (!canvasRef.current) return;
+    let cancelled = false;
     try {
       pipelineRef.current = new Pipeline(canvasRef.current);
     } catch (err) {
       setStatus(`WebGL init failed: ${(err as Error).message}`);
+      return;
     }
+    const paintAfterLayout = () => {
+      if (!cancelled) paintFrameRef.current();
+    };
+    paintAfterLayout();
+    const raf = requestAnimationFrame(paintAfterLayout);
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(raf);
+      pipelineRef.current = null;
+    };
   }, [setStatus]);
 
   useEffect(() => {
@@ -372,7 +418,13 @@ export function Viewport() {
     measureImageFrame();
     const el = viewportRef.current;
     if (!el) return;
-    const ro = new ResizeObserver(measureImageFrame);
+    const ro = new ResizeObserver((entries) => {
+      const rect = entries[0]?.contentRect;
+      if (rect) {
+        setViewportSize({ w: rect.width, h: rect.height });
+      }
+      measureImageFrame();
+    });
     ro.observe(el);
     window.addEventListener("resize", measureImageFrame);
     return () => {
@@ -382,11 +434,35 @@ export function Viewport() {
   }, [measureImageFrame]);
 
   useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ro = new ResizeObserver(() => {
+      paintFrameRef.current();
+    });
+    ro.observe(canvas);
+    return () => ro.disconnect();
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!selectImage(useEditor.getState())) return;
+    paintFrameRef.current();
+  }, [
+    image,
+    viewportSize.w,
+    viewportSize.h,
+    cropPreview,
+    maskEditing,
+    socialTemplate.enabled,
+  ]);
+
+  useEffect(() => {
     if (!cropPreview) {
-      if (cropWasActiveRef.current) endTransformSession();
-      cropWasActiveRef.current = false;
-      endCompare();
-      resetView();
+      if (cropWasActiveRef.current) {
+        endTransformSession();
+        cropWasActiveRef.current = false;
+        endCompare();
+        resetView();
+      }
       return;
     }
 
@@ -411,6 +487,20 @@ export function Viewport() {
       beginTransformSession(g, image.width, image.height, frame);
     }
   }, [cropPreview, endCompare, resetView, image, setImageFrameIfChanged]);
+
+  useEffect(() => {
+    if (!maskEditing) return;
+    const onPointerDown = (e: PointerEvent) => {
+      const target = e.target as Node;
+      const container = maskOverlayContainerRef.current;
+      if (container?.contains(target)) return;
+      if (target instanceof Element && target.closest("aside")) return;
+      setMaskEditing(false);
+      setActiveMaskId(null);
+    };
+    document.addEventListener("pointerdown", onPointerDown, true);
+    return () => document.removeEventListener("pointerdown", onPointerDown, true);
+  }, [maskEditing, setMaskEditing, setActiveMaskId]);
 
   useEffect(() => () => endCompare(), [endCompare]);
 
@@ -518,7 +608,7 @@ export function Viewport() {
   };
 
   const onComparePointerDown = (e: React.PointerEvent<HTMLButtonElement>) => {
-    if (!image || cropPreview) return;
+    if (!image || cropPreview || maskEditing) return;
     e.preventDefault();
     if (compareTimeoutRef.current) {
       clearTimeout(compareTimeoutRef.current);
@@ -546,7 +636,7 @@ export function Viewport() {
   };
 
   const onCanvasPointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    if (!image || cropPreview || e.button !== 0 || zoom <= 1) return;
+    if (!image || cropPreview || maskEditing || e.button !== 0 || zoom <= 1) return;
     panDragRef.current = {
       active: true,
       startX: e.clientX,
@@ -579,22 +669,49 @@ export function Viewport() {
     ? getSessionRenderGeometry(geometry)
     : undefined;
 
+  const layoutFrame = useMemo((): ImageFrame | null => {
+    if (!image || viewportSize.w < 1 || viewportSize.h < 1) return null;
+    const g = liveGeometry ?? geometry;
+    if (!g) return null;
+    return computePreviewFrame(
+      viewportSize.w,
+      viewportSize.h,
+      image.width,
+      image.height,
+      g,
+      cropPreview,
+    );
+  }, [image, viewportSize, geometry, liveGeometry, cropPreview]);
+
   const showSocialTemplate =
     !!image && socialTemplate.enabled && !cropPreview && !!socialLayout;
-  const canvasFrame = cropPreview && imageFrame
-    ? imageFrame
-    : showSocialTemplate && socialLayout
+  const canvasFrame =
+    showSocialTemplate && socialLayout
       ? socialLayout.photo
-      : null;
+      : cropPreview && isValidFrame(layoutFrame)
+        ? layoutFrame
+        : null;
+  const canPanZoom =
+    !!image && !cropPreview && !maskEditing && !showSocialTemplate;
+  const showMaskOverlay =
+    showMaskOverlayVisible &&
+    linearMasks.length > 0 &&
+    !cropPreview &&
+    !showSocialTemplate &&
+    !!image &&
+    isValidFrame(layoutFrame) &&
+    !!liveGeometry;
+  const maskOverlayFrame = showMaskOverlay ? layoutFrame : null;
 
   return (
     <div
       ref={viewportRef}
       className={cn(
-        "group/viewport relative h-full min-h-0 overflow-hidden bg-[repeating-conic-gradient(#1d1d1d_0%_25%,#161616_0%_50%)] bg-size-[24px_24px]",
+        "group/viewport relative h-full w-full min-h-0 min-w-0 overflow-hidden bg-[repeating-conic-gradient(#1d1d1d_0%_25%,#161616_0%_50%)] bg-size-[24px_24px]",
         dragging &&
           "after:pointer-events-none after:absolute after:inset-2 after:rounded-md after:border-2 after:border-dashed after:border-primary",
         cropPreview && "[&_canvas]:pointer-events-none",
+        maskEditing && "[&_canvas]:pointer-events-none",
         showSocialTemplate && "bg-[#1a1a1a] bg-none",
       )}
       onDragOver={(e) => {
@@ -629,14 +746,11 @@ export function Viewport() {
           canvasFrame
             ? null
             : "inset-0 size-full object-contain object-center",
-          !cropPreview &&
-            !showSocialTemplate &&
+          canPanZoom &&
             !isPanning &&
             !wheelZooming &&
             "transition-transform duration-150 ease-out",
-          image &&
-            !cropPreview &&
-            !showSocialTemplate &&
+          canPanZoom &&
             zoom > 1 &&
             (isPanning ? "cursor-grabbing" : "cursor-grab"),
         )}
@@ -647,6 +761,9 @@ export function Viewport() {
                 top: canvasFrame.oy,
                 width: canvasFrame.dw,
                 height: canvasFrame.dh,
+                transform: canPanZoom
+                  ? `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`
+                  : undefined,
               }
             : {
                 transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
@@ -679,14 +796,14 @@ export function Viewport() {
           >
             <BarChart3 className="size-4" />
           </Button>
-          <div className="mx-0.5 w-px self-stretch bg-border" />
+          <Separator orientation="vertical" className="mx-0.5" />
           <Button
             type="button"
             variant={compareOriginal ? "secondary" : "ghost"}
             size="sm"
             className="h-8 gap-1.5 px-2.5 text-xs select-none"
             title="Click for 2s preview, hold to compare"
-            disabled={cropPreview}
+            disabled={cropPreview || maskEditing}
             onPointerDown={onComparePointerDown}
             onPointerUp={onComparePointerEnd}
             onPointerCancel={onComparePointerEnd}
@@ -695,7 +812,7 @@ export function Viewport() {
             <Eye className="size-3.5" />
             Original
           </Button>
-          <div className="mx-0.5 w-px self-stretch bg-border" />
+          <Separator orientation="vertical" className="mx-0.5" />
           <Button
             type="button"
             variant="ghost"
@@ -705,18 +822,16 @@ export function Viewport() {
               !isZoomedIn && "pointer-events-none w-0 min-w-0 overflow-hidden p-0 opacity-0",
             )}
             title="Reset zoom and pan"
-            disabled={!isZoomedIn || cropPreview}
+            disabled={!isZoomedIn || cropPreview || maskEditing}
             tabIndex={isZoomedIn ? 0 : -1}
             aria-hidden={!isZoomedIn}
             onClick={resetView}
           >
             <RotateCcw className="size-4" />
           </Button>
-          <div
-            className={cn(
-              "mx-0.5 w-px self-stretch bg-border",
-              !isZoomedIn && "opacity-0",
-            )}
+          <Separator
+            orientation="vertical"
+            className={cn("mx-0.5", !isZoomedIn && "opacity-0")}
           />
           <Button
             type="button"
@@ -761,21 +876,59 @@ export function Viewport() {
           Original
         </div>
       )}
-      {cropPreview && image && imageFrame && liveGeometry && (
+      {showMaskOverlay && maskOverlayFrame && liveGeometry && (
+        <div
+          ref={maskOverlayContainerRef}
+          className="absolute z-10 origin-center"
+          style={{
+            left: maskOverlayFrame.ox,
+            top: maskOverlayFrame.oy,
+            width: maskOverlayFrame.dw,
+            height: maskOverlayFrame.dh,
+            transform: canPanZoom
+              ? `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`
+              : undefined,
+          }}
+        >
+          <GradientMaskOverlay
+            image={image}
+            geometry={liveGeometry}
+            viewW={maskOverlayFrame.dw}
+            viewH={maskOverlayFrame.dh}
+            masks={linearMasks}
+            activeMaskId={activeMaskId}
+            interactive={maskEditing}
+            onBeginEdit={beginLinearMaskEdit}
+            onCommitEdit={commitLinearMaskEdit}
+            onUpdateMask={updateLinearMask}
+            onSetActiveMask={setActiveMaskId}
+            onSelectMask={(id) => {
+              setActiveMaskId(id);
+              setMaskEditing(true);
+            }}
+            onExitEdit={() => {
+              setMaskEditing(false);
+              setActiveMaskId(null);
+            }}
+            onDeselect={() => setActiveMaskId(null)}
+          />
+        </div>
+      )}
+      {cropPreview && image && isValidFrame(layoutFrame) && liveGeometry && (
         <div
           className="absolute z-10"
           style={{
-            left: imageFrame.ox,
-            top: imageFrame.oy,
-            width: imageFrame.dw,
-            height: imageFrame.dh,
+            left: layoutFrame.ox,
+            top: layoutFrame.oy,
+            width: layoutFrame.dw,
+            height: layoutFrame.dh,
           }}
         >
           <CropOverlay
             image={image}
             geometry={liveGeometry}
-            viewW={imageFrame.dw}
-            viewH={imageFrame.dh}
+            viewW={layoutFrame.dw}
+            viewH={layoutFrame.dh}
           />
         </div>
       )}

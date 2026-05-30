@@ -1,4 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
+import { ChevronDown, Download, ImagePlus } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuButton,
+  DropdownMenuContent,
+  DropdownMenuItem,
+} from "@/components/ui/dropdown-menu";
 import {
   useEditor,
   selectAdjustments,
@@ -6,7 +14,7 @@ import {
   selectImage,
   selectNeedsReopen,
 } from "./state/store";
-import { StatusPill } from "./components/StatusPill";
+import { StatusPill, isPhotoLoadingStatus } from "./components/StatusPill";
 import { Viewport } from "./components/Viewport";
 import { Filmstrip } from "./components/Filmstrip";
 import { Sidebar } from "./components/Sidebar";
@@ -21,9 +29,6 @@ import { downloadBlob, downloadZip, exportImage, uniqueFilename } from "./editor
 import { pickPhotoFiles, loadDirectoryHandle } from "./editor/fileAccess";
 import { decode } from "./editor/decode";
 import { createBatchProgressReporter } from "./editor/decodeProgress";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Separator } from "@/components/ui/separator";
 
 export function App() {
   const image = useEditor(selectImage);
@@ -38,9 +43,18 @@ export function App() {
   const reopenPhotosFromDirectory = useEditor((s) => s.reopenPhotosFromDirectory);
   const importPhotoFiles = useEditor((s) => s.importPhotoFiles);
   const sourceDirectoryName = useEditor((s) => s.sourceDirectoryName);
-  const resetAdjustments = useEditor((s) => s.resetAdjustments);
+  const undo = useEditor((s) => s.undo);
+  const redo = useEditor((s) => s.redo);
   const setStatus = useEditor((s) => s.setStatus);
   const setDecodeProgress = useEditor((s) => s.setDecodeProgress);
+
+  const isDimensionStatus = !!status && /^\d+ × \d+$/.test(status);
+  const showPhotoLoading =
+    restoringFiles ||
+    decodeProgress != null ||
+    isPhotoLoadingStatus(status);
+  const loadingStatus =
+    status ?? (restoringFiles ? "Restoring photos…" : null);
 
   const [sidebarWidth, setSidebarWidth] = useState(
     () => loadUiPrefs().sidebarWidth,
@@ -64,7 +78,32 @@ export function App() {
     })();
   }, [restoreCachedFiles, reopenPhotosFromDirectory]);
 
-  const hasCatalog = photoOrder.length > 0;
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      const mod = e.metaKey || e.ctrlKey;
+      if (!mod || e.altKey) return;
+      const target = e.target;
+      if (
+        target instanceof HTMLElement &&
+        (target.isContentEditable ||
+          target.tagName === "INPUT" ||
+          target.tagName === "TEXTAREA" ||
+          target.tagName === "SELECT")
+      ) {
+        return;
+      }
+      if (e.key === "z" || e.key === "Z") {
+        e.preventDefault();
+        if (e.shiftKey) redo();
+        else undo();
+      } else if (e.key === "y" || e.key === "Y") {
+        e.preventDefault();
+        redo();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [undo, redo]);
 
   const onOpen = async () => {
     try {
@@ -181,24 +220,48 @@ export function App() {
     }
   };
 
+  const exportAllLabel =
+    photoOrder.length === 0
+      ? "Export photos"
+      : photoOrder.length === 1
+        ? "Export 1 photo"
+        : `Export ${photoOrder.length} photos`;
+  const exportDisabled = photoOrder.length === 0 && !image;
+
   return (
     <div
       className="relative grid h-full w-full grid-rows-[auto_1fr]"
       style={{ gridTemplateColumns: `1fr ${sidebarWidth}px` }}
     >
-      <header className="col-span-full flex h-12 shrink-0 items-center gap-2.5 border-b border-border bg-sidebar px-4">
-        <span className="text-base font-semibold tracking-wide">Photo</span>
+      <header className="col-span-full flex shrink-0 items-center gap-2.5 border-b border-border bg-sidebar px-4 py-2">
         <Button variant="outline" onClick={onOpen}>
-          Open…
+          <ImagePlus className="size-3.5" />
+          Import photo
         </Button>
-        <Button variant="outline" onClick={resetAdjustments} disabled={!hasCatalog}>
-          Reset
-        </Button>
-        <Separator orientation="vertical" className="mx-1 self-stretch" />
-        <div className="flex min-w-0 flex-1 items-center justify-center px-2">
-          {status ? (
-            <StatusPill status={status} progress={decodeProgress} />
-          ) : null}
+        <div className="flex min-w-0 flex-1 flex-col items-center justify-center px-2">
+          {showPhotoLoading && loadingStatus ? (
+            <div className="flex h-[3.25rem] w-full max-w-[min(100%,36rem)] items-center justify-center">
+              <StatusPill status={loadingStatus} progress={decodeProgress} />
+            </div>
+          ) : (
+            <div className="flex min-h-[3.25rem] w-full max-w-[min(100%,36rem)] flex-col items-center justify-center gap-2 leading-none">
+              {filename ? (
+                <span
+                  className="max-w-full truncate text-center text-sm leading-none text-foreground"
+                  title={filename}
+                >
+                  {filename}
+                </span>
+              ) : null}
+              {isDimensionStatus ? (
+                <span className="text-center text-xs leading-none tabular-nums text-muted-foreground">
+                  {status}
+                </span>
+              ) : status ? (
+                <StatusPill status={status} progress={decodeProgress} />
+              ) : null}
+            </div>
+          )}
         </div>
         {needsReopen && !restoringFiles && (
           <Button
@@ -218,31 +281,28 @@ export function App() {
             </span>
           </Button>
         )}
-        {filename && (
-          <span
-            className="max-w-[220px] truncate text-base text-muted-foreground"
-            title={filename}
-          >
-            {filename}
-          </span>
-        )}
-        {photoOrder.length > 1 && (
-          <Badge variant="secondary">{photoOrder.length} photos</Badge>
-        )}
-        <Button
-          variant="outline"
-          onClick={onExportAll}
-          disabled={photoOrder.length === 0}
-        >
-          Export all
-        </Button>
-        <Button onClick={onExport} disabled={!image}>
-          Export JPEG
-        </Button>
+        <DropdownMenu>
+          <DropdownMenuButton disabled={exportDisabled}>
+            <Download className="size-3.5" />
+            Export
+            <ChevronDown className="size-3.5" />
+          </DropdownMenuButton>
+          <DropdownMenuContent align="end" className="w-auto min-w-48">
+            <DropdownMenuItem
+              disabled={photoOrder.length === 0}
+              onClick={onExportAll}
+            >
+              {exportAllLabel}
+            </DropdownMenuItem>
+            <DropdownMenuItem disabled={!image} onClick={onExport}>
+              Export JPEG
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </header>
-      <div className="flex min-h-0 min-w-0 overflow-hidden">
+      <div className="flex h-full min-h-0 min-w-0 overflow-hidden">
         <Filmstrip />
-        <div className="min-h-0 min-w-0 flex-1">
+        <div className="relative h-full min-h-0 min-w-0 flex-1">
           <Viewport />
         </div>
       </div>

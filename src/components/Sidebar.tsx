@@ -1,9 +1,12 @@
-import { ClipboardCopy, ClipboardPaste, RotateCcw } from "lucide-react";
+import { ClipboardCopy, ClipboardPaste, Redo2, RotateCcw, Undo2 } from "lucide-react";
 import { AdjustmentSlider } from "@/components/AdjustmentSlider";
 import { InfoTooltip } from "@/components/InfoTooltip";
+import { SliderResetSlot } from "@/components/SliderResetSlot";
 import { SidebarSection } from "@/components/SidebarSection";
 import { TransformPanel } from "@/components/TransformPanel";
+import { MasksPanel } from "@/components/MasksPanel";
 import { SocialTemplatePanel } from "@/components/SocialTemplatePanel";
+import { PresetsPanel } from "@/components/PresetsPanel";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
@@ -34,6 +37,8 @@ import { FILM_STOCKS } from "../editor/filmStocks";
 import { useFilmPreviewUrls } from "../hooks/useFilmPreviews";
 import {
   selectAdjustments,
+  selectCanRedo,
+  selectCanUndo,
   selectImage,
   selectIsRaw,
   selectRawSettings,
@@ -51,6 +56,11 @@ export function Sidebar() {
   const resetRawSettings = useEditor((s) => s.resetRawSettings);
   const copyEditSettings = useEditor((s) => s.copyEditSettings);
   const pasteEditSettings = useEditor((s) => s.pasteEditSettings);
+  const resetAdjustments = useEditor((s) => s.resetAdjustments);
+  const undo = useEditor((s) => s.undo);
+  const redo = useEditor((s) => s.redo);
+  const canUndo = useEditor(selectCanUndo);
+  const canRedo = useEditor(selectCanRedo);
   const editSettingsClipboard = useEditor((s) => s.editSettingsClipboard);
   const disabled = !useEditor(selectImage);
   const filmPreviews = useFilmPreviewUrls();
@@ -58,16 +68,16 @@ export function Sidebar() {
   return (
     <aside className="flex h-full min-h-0 flex-col overflow-hidden border-l border-border bg-sidebar">
       <ScrollArea className="min-h-0 flex-1">
-        <div className="pb-4">
+        <div className="py-4">
           <SidebarSection
             title="Edit Settings"
             hint="Copy tone, color, detail, effects, film, and curve from this photo. Crop, rotation, and straighten are not included."
           >
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-6 gap-2">
               <Button
                 type="button"
                 variant="outline"
-                className="h-9"
+                className="col-span-2 h-9 min-h-9 w-full"
                 disabled={disabled}
                 onClick={copyEditSettings}
               >
@@ -77,15 +87,49 @@ export function Sidebar() {
               <Button
                 type="button"
                 variant="outline"
-                className="h-9"
+                className="col-span-2 h-9 min-h-9 w-full"
                 disabled={disabled || !editSettingsClipboard}
                 onClick={pasteEditSettings}
               >
                 <ClipboardPaste className="size-3.5" />
                 Paste
               </Button>
+              <Button
+                type="button"
+                variant="destructive"
+                className="col-span-2 h-9 min-h-9 w-full"
+                disabled={disabled}
+                onClick={resetAdjustments}
+              >
+                <RotateCcw className="size-3.5" />
+                Reset
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                className="col-span-3 h-9 min-h-9 w-full"
+                title="Undo (⌘Z)"
+                disabled={disabled || !canUndo}
+                onClick={undo}
+              >
+                <Undo2 className="size-3.5" />
+                Undo
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                className="col-span-3 h-9 min-h-9 w-full"
+                title="Redo (⌘⇧Z)"
+                disabled={disabled || !canRedo}
+                onClick={redo}
+              >
+                <Redo2 className="size-3.5" />
+                Redo
+              </Button>
             </div>
           </SidebarSection>
+
+          <PresetsPanel />
 
           {isRaw && (
             <SidebarSection
@@ -128,42 +172,48 @@ export function Sidebar() {
                   <InfoTooltip text="Off = darker, flatter linear decode. All RAW files get a soft, slightly muted develop pass after decode." />
                 </div>
 
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between gap-2">
-                    <Label className="font-normal">Demosaic</Label>
-                    <div className="flex items-center gap-1.5">
-                      <span className="tabular-nums text-muted-foreground">
+                <div className="flex flex-col gap-2">
+                  <div className="flex min-h-8 items-center gap-2">
+                    <Label className="min-w-0 flex-1 text-[13px] font-normal leading-normal text-muted-foreground">
+                      Demosaic
+                    </Label>
+                    <div className="flex shrink-0 items-center justify-end gap-1.5">
+                      <span className="text-right text-xs font-medium tabular-nums leading-[1.3] text-foreground">
                         {raw.demosaicQuality}
                       </span>
-                      {raw.demosaicQuality !==
-                        DEFAULT_RAW_SETTINGS.demosaicQuality && (
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon-sm"
-                          className="text-muted-foreground"
-                          title="Reset"
-                          onClick={() =>
-                            setRawSetting(
-                              "demosaicQuality",
-                              DEFAULT_RAW_SETTINGS.demosaicQuality,
-                            )
-                          }
-                        >
-                          <RotateCcw className="size-4" />
-                        </Button>
-                      )}
+                      <SliderResetSlot
+                        visible={
+                          raw.demosaicQuality !==
+                          DEFAULT_RAW_SETTINGS.demosaicQuality
+                        }
+                        disabled={disabled}
+                        onClick={() =>
+                          setRawSetting(
+                            "demosaicQuality",
+                            DEFAULT_RAW_SETTINGS.demosaicQuality,
+                          )
+                        }
+                      />
                     </div>
                   </div>
                   <Slider
+                    variant="adjustment"
                     min={0}
                     max={12}
                     step={1}
                     value={[raw.demosaicQuality]}
+                    pivotValue={DEFAULT_RAW_SETTINGS.demosaicQuality}
+                    disabled={disabled}
                     onValueChange={(v) => {
                       const n = Array.isArray(v) ? v[0] : v;
                       if (n !== undefined) setRawSetting("demosaicQuality", n);
                     }}
+                    onDoubleClick={() =>
+                      setRawSetting(
+                        "demosaicQuality",
+                        DEFAULT_RAW_SETTINGS.demosaicQuality,
+                      )
+                    }
                   />
                 </div>
 
@@ -183,10 +233,10 @@ export function Sidebar() {
 
           <TransformPanel />
 
-          <SocialTemplatePanel />
+          <MasksPanel />
 
           <SidebarSection title="Light">
-            <div className="space-y-5">
+            <div className="space-y-3">
               {TONE_SLIDERS.map((s) => (
                 <AdjustmentSlider
                   key={s.key}
@@ -200,7 +250,7 @@ export function Sidebar() {
           </SidebarSection>
 
           <SidebarSection title="Color">
-            <div className="space-y-5">
+            <div className="space-y-3">
               {COLOR_SLIDERS.map((s) => (
                 <AdjustmentSlider
                   key={s.key}
@@ -217,7 +267,7 @@ export function Sidebar() {
             title="Detail"
             hint="Definition and sharpening enhance texture. Noise sliders smooth grain after develop — separate from RAW Develop denoise."
           >
-            <div className="space-y-5">
+            <div className="space-y-3">
               {DETAIL_SLIDERS.map((s) => (
                 <AdjustmentSlider
                   key={s.key}
@@ -272,7 +322,7 @@ export function Sidebar() {
             title="Film Effects"
             hint="Creative overlays — grain amount and size; density sets particle spacing (sparse vs packed); roughness adds organic clumping, softness blurs grain edges, color grain tints channels, tone response links grain to shadows and midtones; vintage fades tones and adds vignette."
           >
-            <div className="space-y-5">
+            <div className="space-y-3">
               {EFFECTS_SLIDERS.map((s) => (
                 <AdjustmentSlider
                   key={s.key}
@@ -294,6 +344,8 @@ export function Sidebar() {
               onChange={(c) => setAdjustment("curve", c)}
             />
           </SidebarSection>
+
+          <SocialTemplatePanel />
         </div>
       </ScrollArea>
     </aside>

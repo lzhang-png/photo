@@ -1,6 +1,6 @@
 import { Adjustments } from "./adjustments";
-import { wbMatrix } from "./colorMath";
 import { buildCurveLUT } from "./curve";
+import { packMaskUniforms } from "./masks";
 import { FILM_SHADER_INDEX } from "./filmStocks";
 import {
   getFullRotatedPreviewSize,
@@ -93,8 +93,15 @@ export class Pipeline {
       "u_shadows",
       "u_whites",
       "u_blacks",
-      "u_wbMatrix",
+      "u_temperature",
+      "u_tint",
       "u_vibrance",
+      "u_maskCount",
+      "u_maskLine",
+      "u_maskFeather",
+      "u_maskTone",
+      "u_maskWhitesBlacks",
+      "u_maskColor",
       "u_saturation",
       "u_definition",
       "u_sharpen",
@@ -293,12 +300,17 @@ export class Pipeline {
     gl.uniform1f(uniforms.u_shadows!, adj.shadows);
     gl.uniform1f(uniforms.u_whites!, adj.whites);
     gl.uniform1f(uniforms.u_blacks!, adj.blacks);
-    gl.uniformMatrix3fv(
-      uniforms.u_wbMatrix!,
-      false,
-      wbMatrix(adj.temperature, adj.tint),
-    );
+    gl.uniform1f(uniforms.u_temperature!, adj.temperature);
+    gl.uniform1f(uniforms.u_tint!, adj.tint);
     gl.uniform1f(uniforms.u_vibrance!, adj.vibrance);
+
+    const masks = packMaskUniforms(adj.linearMasks ?? []);
+    gl.uniform1i(uniforms.u_maskCount!, masks.count);
+    gl.uniform4fv(uniforms.u_maskLine!, masks.lines);
+    gl.uniform1fv(uniforms.u_maskFeather!, masks.feather);
+    gl.uniform4fv(uniforms.u_maskTone!, masks.tone);
+    gl.uniform2fv(uniforms.u_maskWhitesBlacks!, masks.whitesBlacks);
+    gl.uniform4fv(uniforms.u_maskColor!, masks.color);
     gl.uniform1f(uniforms.u_saturation!, adj.saturation);
     gl.uniform1f(uniforms.u_definition!, adj.definition);
     gl.uniform1f(uniforms.u_sharpen!, adj.sharpen);

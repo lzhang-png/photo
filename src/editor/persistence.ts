@@ -1,5 +1,6 @@
 import type { Adjustments } from "./adjustments";
 import { migrateGeometry } from "./geometry";
+import { normalizeLinearMasks } from "./masks";
 import { normalizeRawSettings, type RawSettings } from "./rawSettings";
 import {
   normalizeSocialTemplate,
@@ -61,6 +62,13 @@ export function cloneAdjustments(adj: Adjustments): Adjustments {
     vintage: typeof adj.vintage === "number" ? adj.vintage : 0,
     geometry: migrateGeometry(adj.geometry),
     curve: adj.curve.map((p) => ({ ...p })),
+    linearMasks: normalizeLinearMasks(adj.linearMasks).map((m) => ({
+      ...m,
+      p0: { ...m.p0 },
+      p1: { ...m.p1 },
+      light: { ...m.light },
+      color: { ...m.color },
+    })),
   };
 }
 

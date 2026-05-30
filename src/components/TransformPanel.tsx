@@ -20,7 +20,9 @@ import {
 import { useEditor, selectImage } from "../state/store";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Slider } from "@/components/ui/slider";
+import { SliderResetSlot } from "@/components/SliderResetSlot";
 import { SidebarSection } from "./SidebarSection";
 
 const ASPECT_PRESETS = [
@@ -112,39 +114,36 @@ export function TransformPanel() {
         </Button>
       </div>
 
-      <div className="mt-4 space-y-2">
-        <div className="flex items-center justify-between gap-2">
-          <Label className="font-normal">Level</Label>
-          <div className="flex items-center gap-1.5">
-            <span className="tabular-nums text-muted-foreground">
+      <div className="mt-4 flex flex-col gap-2">
+        <div className="flex min-h-8 items-center gap-2">
+          <Label className="min-w-0 flex-1 text-[13px] font-normal leading-normal text-muted-foreground">
+            Level
+          </Label>
+          <div className="flex shrink-0 items-center justify-end gap-1.5">
+            <span className="text-right text-xs font-medium tabular-nums leading-[1.3] text-foreground">
               {straighten >= 0 ? "+" : ""}
               {straighten.toFixed(1)}°
             </span>
-            {straighten !== 0 && (
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon-sm"
-                className="text-muted-foreground"
-                title="Reset"
-                disabled={disabled}
-                onClick={() => onStraightenChange(0)}
-              >
-                <RotateCcw className="size-4" />
-              </Button>
-            )}
+            <SliderResetSlot
+              visible={straighten !== 0}
+              disabled={disabled}
+              onClick={() => onStraightenChange(0)}
+            />
           </div>
         </div>
         <Slider
+          variant="adjustment"
           min={-15}
           max={15}
           step={0.1}
           value={[straighten]}
+          pivotValue={0}
           disabled={disabled}
           onValueChange={(v) => {
             const n = Array.isArray(v) ? v[0] : v;
             if (n !== undefined) onStraightenChange(n);
           }}
+          onDoubleClick={() => onStraightenChange(0)}
         />
       </div>
 
@@ -174,11 +173,11 @@ export function TransformPanel() {
             <LockOpen className="size-4" />
           )}
         </Button>
+        <ToggleGroup variant="outline" className="contents" disabled={disabled}>
         {ASPECT_PRESETS.map((p) => (
-          <Button
+          <ToggleGroupItem
             key={p.label}
-            type="button"
-            variant="outline"
+            value={p.label}
             className="h-9"
             disabled={disabled}
             onClick={() => {
@@ -197,8 +196,9 @@ export function TransformPanel() {
             }}
           >
             {p.label}
-          </Button>
+          </ToggleGroupItem>
         ))}
+        </ToggleGroup>
       </div>
 
       {!isDefaultGeometry(liveGeom) && (

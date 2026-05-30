@@ -1,11 +1,14 @@
 import type { CurvePoint } from "./curve";
 import { DEFAULT_CURVE } from "./curve";
-import type { FilmId } from "./filmStocks";
+import { FILM_SHADER_INDEX, type FilmId } from "./filmStocks";
 import {
   cloneGeometry,
   DEFAULT_GEOMETRY,
   type Geometry,
 } from "./geometry";
+import {
+  type LinearGradientMask,
+} from "./masks";
 
 export type Adjustments = {
   exposure: number;
@@ -33,6 +36,7 @@ export type Adjustments = {
   film: FilmId;
   geometry: Geometry;
   curve: CurvePoint[];
+  linearMasks: LinearGradientMask[];
 };
 
 /** Tone, color, film, and curve — everything except crop/rotate/straighten. */
@@ -64,6 +68,13 @@ export function extractEditSettings(adj: Adjustments): EditSettings {
     vintage: adj.vintage,
     film: adj.film,
     curve: adj.curve.map((p) => ({ ...p })),
+    linearMasks: adj.linearMasks.map((m) => ({
+      ...m,
+      p0: { ...m.p0 },
+      p1: { ...m.p1 },
+      light: { ...m.light },
+      color: { ...m.color },
+    })),
   };
 }
 
@@ -76,7 +87,74 @@ export function applyEditSettings(
     ...edits,
     geometry: cloneGeometry(adj.geometry),
     curve: edits.curve.map((p) => ({ ...p })),
+    linearMasks: edits.linearMasks.map((m) => ({
+      ...m,
+      p0: { ...m.p0 },
+      p1: { ...m.p1 },
+      light: { ...m.light },
+      color: { ...m.color },
+    })),
   };
+}
+
+export function editSettingsEqual(a: EditSettings, b: EditSettings): boolean {
+  if (a.film !== b.film) return false;
+  const keys = [
+    "exposure",
+    "contrast",
+    "highlights",
+    "shadows",
+    "whites",
+    "blacks",
+    "temperature",
+    "tint",
+    "vibrance",
+    "saturation",
+    "definition",
+    "sharpen",
+    "luminanceNoise",
+    "colorNoise",
+    "filmGrain",
+    "filmGrainSize",
+    "filmGrainDensity",
+    "filmGrainRoughness",
+    "filmGrainSoftness",
+    "filmGrainColor",
+    "filmGrainResponse",
+    "vintage",
+  ] as const;
+  for (const key of keys) {
+    if (a[key] !== b[key]) return false;
+  }
+  if (a.curve.length !== b.curve.length) return false;
+  for (let i = 0; i < a.curve.length; i++) {
+    if (a.curve[i]!.x !== b.curve[i]!.x || a.curve[i]!.y !== b.curve[i]!.y) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/** Fill missing fields and clamp stored preset values to current schema. */
+export function normalizeEditSettings(
+  partial?: Partial<EditSettings> | null,
+): EditSettings {
+  const base = extractEditSettings(DEFAULT_ADJUSTMENTS);
+  if (!partial) return base;
+
+  const film =
+    partial.film && partial.film in FILM_SHADER_INDEX
+      ? partial.film
+      : base.film;
+
+  return extractEditSettings({
+    ...DEFAULT_ADJUSTMENTS,
+    ...partial,
+    film,
+    curve: Array.isArray(partial.curve)
+      ? partial.curve.map((p) => ({ x: p.x, y: p.y }))
+      : base.curve,
+  });
 }
 
 export const DEFAULT_ADJUSTMENTS: Adjustments = {
@@ -105,6 +183,7 @@ export const DEFAULT_ADJUSTMENTS: Adjustments = {
   film: "none",
   geometry: cloneGeometry(DEFAULT_GEOMETRY),
   curve: DEFAULT_CURVE.map((p) => ({ ...p })),
+  linearMasks: [],
 };
 
 /** Hold-to-compare: decoded look with current crop, no edit sliders. */
@@ -117,7 +196,7 @@ export function originalPreviewAdjustments(adj: Adjustments): Adjustments {
 }
 
 export type SliderSpec = {
-  key: keyof Omit<Adjustments, "curve" | "film" | "geometry">;
+  key: keyof Omit<Adjustments, "curve" | "film" | "geometry" | "linearMasks">;
   label: string;
   min: number;
   max: number;

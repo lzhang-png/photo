@@ -6,6 +6,7 @@ export const MAX_SIDEBAR_WIDTH = 560;
 
 export type UiPrefs = {
   showHistogram: boolean;
+  showMaskOverlay: boolean;
   sidebarWidth: number;
   collapsedSections: string[];
   sourceDirectoryName: string | null;
@@ -13,6 +14,7 @@ export type UiPrefs = {
 
 const DEFAULT_PREFS: UiPrefs = {
   showHistogram: false,
+  showMaskOverlay: true,
   sidebarWidth: DEFAULT_SIDEBAR_WIDTH,
   collapsedSections: [],
   sourceDirectoryName: null,

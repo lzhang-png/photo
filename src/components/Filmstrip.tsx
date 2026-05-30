@@ -1,6 +1,6 @@
-import { AlertDialog } from "@base-ui/react/alert-dialog";
 import { X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ScrollArea, ScrollBar } from "@/components/ui/scroll-area";
@@ -141,7 +141,7 @@ export function Filmstrip() {
           </div>
           <ScrollBar orientation="vertical" />
         </ScrollArea>
-        <div className="shrink-0 border-t border-border p-1.5">
+        <div className="my-3 shrink-0 border-t border-border p-1.5">
           <Button
             type="button"
             variant="ghost"
@@ -174,40 +174,20 @@ export function Filmstrip() {
           <X className="size-3" />
         </Button>
       )}
-      <AlertDialog.Root open={clearOpen} onOpenChange={setClearOpen}>
-        <AlertDialog.Portal>
-          <AlertDialog.Backdrop className="fixed inset-0 z-[100] bg-black/60 transition-opacity data-[ending-style]:opacity-0 data-[starting-style]:opacity-0" />
-          <AlertDialog.Viewport className="fixed inset-0 z-[100] flex items-center justify-center p-4">
-            <AlertDialog.Popup className="w-full max-w-sm rounded-lg border border-border bg-popover p-6 text-popover-foreground shadow-lg outline-none data-[ending-style]:scale-95 data-[starting-style]:scale-95 data-[ending-style]:opacity-0 data-[starting-style]:opacity-0 transition-[transform,opacity] duration-100">
-              <AlertDialog.Title className="text-base font-semibold">
-                Clear all photos?
-              </AlertDialog.Title>
-              <AlertDialog.Description className="mt-2 text-sm text-muted-foreground">
-                Remove all {photoOrder.length} photo
-                {photoOrder.length === 1 ? "" : "s"} from the catalog. Edits and
-                settings will be lost. This cannot be undone.
-              </AlertDialog.Description>
-              <div className="mt-6 flex justify-end gap-2">
-                <AlertDialog.Close
-                  render={
-                    <Button type="button" variant="outline" className="active:!translate-y-0">
-                      Cancel
-                    </Button>
-                  }
-                />
-                <Button
-                  type="button"
-                  variant="destructive"
-                  className="active:!translate-y-0"
-                  onClick={onConfirmClearAll}
-                >
-                  Clear all
-                </Button>
-              </div>
-            </AlertDialog.Popup>
-          </AlertDialog.Viewport>
-        </AlertDialog.Portal>
-      </AlertDialog.Root>
+      <ConfirmDialog
+        open={clearOpen}
+        onOpenChange={setClearOpen}
+        title="Clear all photos?"
+        description={
+          <>
+            Remove all {photoOrder.length} photo
+            {photoOrder.length === 1 ? "" : "s"} from the catalog. Edits and
+            settings will be lost. This cannot be undone.
+          </>
+        }
+        confirmLabel="Clear all"
+        onConfirm={onConfirmClearAll}
+      />
     </>
   );
 }
